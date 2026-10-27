@@ -61,7 +61,6 @@ def close_connection(exception):
 def init_db():
   with app.app_context():
     db = get_db()
-    # Migration: Ensure trip_type column exists
     db.execute("""
             CREATE TABLE IF NOT EXISTS trips (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -81,7 +80,7 @@ def init_db():
     try:
       db.execute("ALTER TABLE trips ADD COLUMN trip_type TEXT DEFAULT 'A'")
     except sqlite3.OperationalError:
-      pass  # Column already exists
+      pass
     db.commit()
 
 
@@ -177,23 +176,27 @@ HTML_TEMPLATE = """
                 <div class="card-title">Trip A (Short / Leg)</div>
                 {% if active_a %}
                     <div class="status-text">In Progress...</div>
-                    <div class="stat-value" id="timer-a">00:00:00</div>
+                    <div class="stat-value" id="timer-a">-- hr -- min</div>
                     <div class="stat-label">Elapsed Time</div>
+                    <div class="stat-value" id="dist-a">-- km</div>
+                    <div class="stat-label">Active Mileage</div>
                     <form action="{{ url_for('end_trip', trip_type='A') }}" method="POST">
                         <button type="submit" class="btn btn-end">End Trip A</button>
                     </form>
                     <script>
                         const startA = new Date("{{ active_a.start_time }}").getTime();
-                        function updateTimerA() {
-                            const diff = Math.floor((new Date().getTime() - startA) / 1000);
-                            if (diff >= 0) {
-                                const h = String(Math.floor(diff / 3600)).padStart(2, '0');
-                                const m = String(Math.floor((diff % 3600) / 60)).padStart(2, '0');
-                                const s = String(diff % 60).padStart(2, '0');
-                                document.getElementById('timer-a').innerText = `${h}:${m}:${s}`;
-                            }
+                        const startOdoA = {{ active_a.start_odo }};
+                        function updateTripA() {
+                            const now = new Date().getTime();
+                            const diffMins = Math.floor((now - startA) / 60000);
+                            const h = Math.floor(diffMins / 60);
+                            const m = diffMins % 60;
+                            document.getElementById('timer-a').innerText = `${h} hr ${m} min`;
+                            
+                            // Estimate live mileage based on server ODO if updated, else show elapsed time baseline
+                            // (Will pull fresh odo from next page refresh or live fetch)
                         }
-                        setInterval(updateTimerA, 1000); updateTimerA();
+                        setInterval(updateTripA, 10000); updateTripA();
                     </script>
                 {% else %}
                     <div class="status-text">Ready</div>
@@ -208,23 +211,24 @@ HTML_TEMPLATE = """
                 <div class="card-title">Trip B (Long / Tank)</div>
                 {% if active_b %}
                     <div class="status-text">In Progress...</div>
-                    <div class="stat-value" id="timer-b">00:00:00</div>
+                    <div class="stat-value" id="timer-b">-- hr -- min</div>
                     <div class="stat-label">Elapsed Time</div>
+                    <div class="stat-value" id="dist-b">-- km</div>
+                    <div class="stat-label">Active Mileage</div>
                     <form action="{{ url_for('end_trip', trip_type='B') }}" method="POST">
                         <button type="submit" class="btn btn-end">End Trip B</button>
                     </form>
                     <script>
                         const startB = new Date("{{ active_b.start_time }}").getTime();
-                        function updateTimerB() {
-                            const diff = Math.floor((new Date().getTime() - startB) / 1000);
-                            if (diff >= 0) {
-                                const h = String(Math.floor(diff / 3600)).padStart(2, '0');
-                                const m = String(Math.floor((diff % 3600) / 60)).padStart(2, '0');
-                                const s = String(diff % 60).padStart(2, '0');
-                                document.getElementById('timer-b').innerText = `${h}:${m}:${s}`;
-                            }
+                        const startOdoB = {{ active_b.start_odo }};
+                        function updateTripB() {
+                            const now = new Date().getTime();
+                            const diffMins = Math.floor((now - startB) / 60000);
+                            const h = Math.floor(diffMins / 60);
+                            const m = diffMins % 60;
+                            document.getElementById('timer-b').innerText = `${h} hr ${m} min`;
                         }
-                        setInterval(updateTimerB, 1000); updateTimerB();
+                        setInterval(updateTripB, 10000); updateTripB();
                     </script>
                 {% else %}
                     <div class="status-text">Ready</div>
@@ -303,6 +307,18 @@ def index():
       "SELECT * FROM trips WHERE trip_type = 'B' AND status = 'ACTIVE' LIMIT 1"
   ).fetchone()
 
+  # Calculate live active mileage if active
+  current_telemetry = fetch_car_telemetry()
+  current_odo = current_telemetry.get("odo", 0.0)
+
+  live_dist_a = 0.0
+  if active_a and current_odo > 0:
+    live_dist_a = max(0.0, current_odo - active_a["start_odo"])
+
+  live_dist_b = 0.0
+  if active_b and current_odo > 0:
+    live_dist_b = max(0.0, current_odo - active_b["start_odo"])
+
   raw_completed = db.execute(
       "SELECT * FROM trips WHERE status = 'COMPLETED' ORDER BY id DESC LIMIT 10"
   ).fetchall()
@@ -321,10 +337,23 @@ def index():
         {"trip": trip, "total_cost": total_cost, "cost_per_km": cost_per_km}
     )
 
+  # Inject live distance into active objects for template display
+  active_a_dict = dict(active_a) if active_a else None
+  if active_a_dict:
+    active_a_dict["live_dist"] = (
+        live_dist_a if live_dist_a > 0 else (current_odo - active_a["start_odo"])
+    )
+
+  active_b_dict = dict(active_b) if active_b else None
+  if active_b_dict:
+    active_b_dict["live_dist"] = (
+        live_dist_b if live_dist_b > 0 else (current_odo - active_b["start_odo"])
+    )
+
   return render_template_string(
       HTML_TEMPLATE,
-      active_a=active_a,
-      active_b=active_b,
+      active_a=active_a_dict,
+      active_b=active_b_dict,
       completed_trips=completed_trips,
       rates=rates,
   )
