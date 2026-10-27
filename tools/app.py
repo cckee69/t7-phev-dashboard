@@ -130,7 +130,6 @@ def calculate_trip_cost(distance, start_bat, end_bat, start_fuel, end_fuel, rate
 
   return total_cost, cost_per_km
 
-
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -178,23 +177,19 @@ HTML_TEMPLATE = """
                     <div class="status-text">In Progress...</div>
                     <div class="stat-value" id="timer-a">-- hr -- min</div>
                     <div class="stat-label">Elapsed Time</div>
-                    <div class="stat-value" id="dist-a">-- km</div>
+                    <div class="stat-value">{{ "%.1f"|format(active_a.live_dist) if active_a.live_dist > 0 else '0.0' }} km</div>
                     <div class="stat-label">Active Mileage</div>
                     <form action="{{ url_for('end_trip', trip_type='A') }}" method="POST">
                         <button type="submit" class="btn btn-end">End Trip A</button>
                     </form>
                     <script>
                         const startA = new Date("{{ active_a.start_time }}").getTime();
-                        const startOdoA = {{ active_a.start_odo }};
                         function updateTripA() {
                             const now = new Date().getTime();
                             const diffMins = Math.floor((now - startA) / 60000);
                             const h = Math.floor(diffMins / 60);
                             const m = diffMins % 60;
                             document.getElementById('timer-a').innerText = `${h} hr ${m} min`;
-                            
-                            // Estimate live mileage based on server ODO if updated, else show elapsed time baseline
-                            // (Will pull fresh odo from next page refresh or live fetch)
                         }
                         setInterval(updateTripA, 10000); updateTripA();
                     </script>
@@ -213,14 +208,13 @@ HTML_TEMPLATE = """
                     <div class="status-text">In Progress...</div>
                     <div class="stat-value" id="timer-b">-- hr -- min</div>
                     <div class="stat-label">Elapsed Time</div>
-                    <div class="stat-value" id="dist-b">-- km</div>
+                    <div class="stat-value">{{ "%.1f"|format(active_b.live_dist) if active_b.live_dist > 0 else '0.0' }} km</div>
                     <div class="stat-label">Active Mileage</div>
                     <form action="{{ url_for('end_trip', trip_type='B') }}" method="POST">
                         <button type="submit" class="btn btn-end">End Trip B</button>
                     </form>
                     <script>
                         const startB = new Date("{{ active_b.start_time }}").getTime();
-                        const startOdoB = {{ active_b.start_odo }};
                         function updateTripB() {
                             const now = new Date().getTime();
                             const diffMins = Math.floor((now - startB) / 60000);
