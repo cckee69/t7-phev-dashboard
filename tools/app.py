@@ -17,7 +17,6 @@ RATES_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "rates.json"
 )
 
-# Default fallback values
 DEFAULT_RATES = {
     "fuel_price_per_l": 1.99,
     "elec_price_per_kwh": 0.33,
@@ -27,19 +26,16 @@ DEFAULT_RATES = {
 
 
 def load_rates():
-  """Loads fuel and electricity rates from rates.json."""
   if os.path.exists(RATES_FILE):
     try:
       with open(RATES_FILE, "r") as f:
-        data = json.load(f)
-        return {**DEFAULT_RATES, **data}
+        return {**DEFAULT_RATES, **json.load(f)}
     except Exception as e:
       print(f"Error loading rates.json: {e}")
   return DEFAULT_RATES.copy()
 
 
 def save_rates(rates):
-  """Saves updated rates to rates.json."""
   try:
     with open(RATES_FILE, "w") as f:
       json.dump(rates, f, indent=2)
@@ -65,9 +61,11 @@ def close_connection(exception):
 def init_db():
   with app.app_context():
     db = get_db()
+    # Migration: Ensure trip_type column exists
     db.execute("""
             CREATE TABLE IF NOT EXISTS trips (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trip_type TEXT DEFAULT 'A',
                 start_time TEXT,
                 end_time TEXT,
                 start_odo REAL,
@@ -80,6 +78,10 @@ def init_db():
                 status TEXT
             )
         """)
+    try:
+      db.execute("ALTER TABLE trips ADD COLUMN trip_type TEXT DEFAULT 'A'")
+    except sqlite3.OperationalError:
+      pass  # Column already exists
     db.commit()
 
 
@@ -99,8 +101,7 @@ def fetch_car_telemetry():
       conn.close()
 
       if row and server:
-        hex_data = row[1]
-        decoded = server.decode(hex_data)
+        decoded = server.decode(row[1])
         return {
             "odo": decoded.get("odometer", 0.0),
             "battery": decoded.get("battery", 0.0),
@@ -117,12 +118,12 @@ def calculate_trip_cost(distance, start_bat, end_bat, start_fuel, end_fuel, rate
   if not distance or distance <= 0:
     return 0.0, 0.0
 
-  bat_drop_pct = max(0.0, (start_bat or 0.0) - (end_bat or 0.0))
-  kwh_used = (bat_drop_pct / 100.0) * rates["battery_capacity_kwh"]
+  bat_drop = max(0.0, (start_bat or 0.0) - (end_bat or 0.0))
+  kwh_used = (bat_drop / 100.0) * rates["battery_capacity_kwh"]
   elec_cost = kwh_used * rates["elec_price_per_kwh"]
 
-  fuel_drop_pct = max(0.0, (start_fuel or 0.0) - (end_fuel or 0.0))
-  liters_used = (fuel_drop_pct / 100.0) * rates["fuel_tank_capacity_l"]
+  fuel_drop = max(0.0, (start_fuel or 0.0) - (end_fuel or 0.0))
+  liters_used = (fuel_drop / 100.0) * rates["fuel_tank_capacity_l"]
   fuel_cost = liters_used * rates["fuel_price_per_l"]
 
   total_cost = elec_cost + fuel_cost
@@ -137,78 +138,106 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PHEV One-Touch Tracker</title>
+    <title>PHEV Dual-Trip Tracker</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #121212; color: #e0e0e0; margin: 0; padding: 20px; display: flex; justify-content: center; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #121212; color: #e0e0e0; margin: 0; padding: 16px; display: flex; justify-content: center; }
         .container { width: 100%; max-width: 520px; }
-        h1 { text-align: center; font-size: 1.5rem; margin-bottom: 20px; color: #fff; }
-        .card { background: #1e1e1e; border-radius: 12px; padding: 20px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); text-align: center; }
-        .btn { display: block; width: 100%; padding: 16px; font-size: 1.1rem; font-weight: bold; border: none; border-radius: 8px; cursor: pointer; text-decoration: none; color: white; }
+        h1 { text-align: center; font-size: 1.4rem; margin-bottom: 16px; color: #fff; }
+        .trips-grid { display: flex; gap: 12px; margin-bottom: 16px; }
+        .card { background: #1e1e1e; border-radius: 12px; padding: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); text-align: center; flex: 1; }
+        .card-title { font-size: 1.1rem; font-weight: bold; margin-bottom: 12px; color: #64b5f6; }
+        .btn { display: block; width: 100%; padding: 14px 8px; font-size: 1rem; font-weight: bold; border: none; border-radius: 8px; cursor: pointer; color: white; }
         .btn-start { background-color: #2e7d32; }
         .btn-end { background-color: #c62828; }
-        .btn-save { background-color: #0288d1; margin-top: 10px; padding: 10px; font-size: 0.9rem; }
-        .status-text { font-size: 1.1rem; margin-bottom: 16px; color: #b0bec5; }
-        .live-stats { display: flex; justify-content: space-around; background: #262626; padding: 12px; border-radius: 8px; margin-bottom: 20px; }
-        .stat-box { text-align: center; }
-        .stat-value { font-size: 1.3rem; font-weight: bold; color: #4caf50; }
-        .stat-label { font-size: 0.8rem; color: #888; text-transform: uppercase; margin-top: 4px; }
-        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.85rem; }
-        th, td { padding: 10px 6px; text-align: left; border-bottom: 1px solid #2c2c2c; }
+        .btn-save { background-color: #0288d1; margin-top: 10px; padding: 8px; font-size: 0.85rem; }
+        .status-text { font-size: 0.9rem; margin-bottom: 12px; color: #b0bec5; }
+        .stat-value { font-size: 1.1rem; font-weight: bold; color: #4caf50; margin-bottom: 2px; }
+        .stat-label { font-size: 0.75rem; color: #888; text-transform: uppercase; margin-bottom: 10px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.8rem; }
+        th, td { padding: 8px 4px; text-align: left; border-bottom: 1px solid #2c2c2c; }
         th { color: #888; font-weight: 600; }
+        .badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 0.75rem; }
+        .badge-a { background: #1565c0; color: white; }
+        .badge-b { background: #6a1b9a; color: white; }
         .cost-highlight { color: #4caf50; font-weight: bold; }
-        .rates-form { display: flex; gap: 10px; justify-content: space-between; text-align: left; margin-top: 10px; }
+        .rates-form { display: flex; gap: 10px; justify-content: space-between; text-align: left; margin-top: 8px; }
         .rates-field { flex: 1; }
-        .rates-field label { display: block; font-size: 0.75rem; color: #aaa; margin-bottom: 4px; }
-        .rates-field input { width: 90%; padding: 6px; border-radius: 4px; border: 1px solid #333; background: #2a2a2a; color: #fff; font-size: 0.9rem; }
-        details { color: #888; font-size: 0.85rem; }
-        summary { cursor: pointer; padding: 4px 0; color: #bbb; }
+        .rates-field label { display: block; font-size: 0.7rem; color: #aaa; margin-bottom: 2px; }
+        .rates-field input { width: 85%; padding: 6px; border-radius: 4px; border: 1px solid #333; background: #2a2a2a; color: #fff; font-size: 0.85rem; }
+        details summary { cursor: pointer; color: #bbb; font-size: 0.85rem; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🚗 PHEV One-Touch Tracker</h1>
+        <h1>🚗 PHEV Dual-Trip Tracker</h1>
         
-        <div class="card">
-            {% if active_trip %}
-                <div class="status-text">Trip in Progress...</div>
-                <div class="live-stats">
-                    <div class="stat-box">
-                        <div class="stat-value" id="timer">00:00:00</div>
-                        <div class="stat-label">Elapsed Time</div>
-                    </div>
-                    <div class="stat-box">
-                        <div class="stat-value" id="live-dist">{{ "%.1f"|format(active_trip.start_odo) }} km</div>
-                        <div class="stat-label">Start Odo</div>
-                    </div>
-                </div>
-                <form action="{{ url_for('end_trip') }}" method="POST">
-                    <button type="submit" class="btn btn-end">End Journey</button>
-                </form>
-                <script>
-                    const startTime = new Date("{{ active_trip.start_time }}").getTime();
-                    function updateTimer() {
-                        const now = new Date().getTime();
-                        const diffSecs = Math.floor((now - startTime) / 1000);
-                        if (diffSecs >= 0) {
-                            const hours = String(Math.floor(diffSecs / 3600)).padStart(2, '0');
-                            const minutes = String(Math.floor((diffSecs % 3600) / 60)).padStart(2, '0');
-                            const seconds = String(diffSecs % 60).padStart(2, '0');
-                            document.getElementById('timer').innerText = `${hours}:${minutes}:${seconds}`;
+        <div class="trips-grid">
+            <!-- TRIP A CARD -->
+            <div class="card">
+                <div class="card-title">Trip A (Short / Leg)</div>
+                {% if active_a %}
+                    <div class="status-text">In Progress...</div>
+                    <div class="stat-value" id="timer-a">00:00:00</div>
+                    <div class="stat-label">Elapsed Time</div>
+                    <form action="{{ url_for('end_trip', trip_type='A') }}" method="POST">
+                        <button type="submit" class="btn btn-end">End Trip A</button>
+                    </form>
+                    <script>
+                        const startA = new Date("{{ active_a.start_time }}").getTime();
+                        function updateTimerA() {
+                            const diff = Math.floor((new Date().getTime() - startA) / 1000);
+                            if (diff >= 0) {
+                                const h = String(Math.floor(diff / 3600)).padStart(2, '0');
+                                const m = String(Math.floor((diff % 3600) / 60)).padStart(2, '0');
+                                const s = String(diff % 60).padStart(2, '0');
+                                document.getElementById('timer-a').innerText = `${h}:${m}:${s}`;
+                            }
                         }
-                    }
-                    setInterval(updateTimer, 1000);
-                    updateTimer();
-                </script>
-            {% else %}
-                <div class="status-text">Ready for your next drive</div>
-                <form action="{{ url_for('start_trip') }}" method="POST">
-                    <button type="submit" class="btn btn-start">Start Journey</button>
-                </form>
-            {% endif %}
+                        setInterval(updateTimerA, 1000); updateTimerA();
+                    </script>
+                {% else %}
+                    <div class="status-text">Ready</div>
+                    <form action="{{ url_for('start_trip', trip_type='A') }}" method="POST">
+                        <button type="submit" class="btn btn-start">Start Trip A</button>
+                    </form>
+                {% endif %}
+            </div>
+
+            <!-- TRIP B CARD -->
+            <div class="card">
+                <div class="card-title">Trip B (Long / Tank)</div>
+                {% if active_b %}
+                    <div class="status-text">In Progress...</div>
+                    <div class="stat-value" id="timer-b">00:00:00</div>
+                    <div class="stat-label">Elapsed Time</div>
+                    <form action="{{ url_for('end_trip', trip_type='B') }}" method="POST">
+                        <button type="submit" class="btn btn-end">End Trip B</button>
+                    </form>
+                    <script>
+                        const startB = new Date("{{ active_b.start_time }}").getTime();
+                        function updateTimerB() {
+                            const diff = Math.floor((new Date().getTime() - startB) / 1000);
+                            if (diff >= 0) {
+                                const h = String(Math.floor(diff / 3600)).padStart(2, '0');
+                                const m = String(Math.floor((diff % 3600) / 60)).padStart(2, '0');
+                                const s = String(diff % 60).padStart(2, '0');
+                                document.getElementById('timer-b').innerText = `${h}:${m}:${s}`;
+                            }
+                        }
+                        setInterval(updateTimerB, 1000); updateTimerB();
+                    </script>
+                {% else %}
+                    <div class="status-text">Ready</div>
+                    <form action="{{ url_for('start_trip', trip_type='B') }}" method="POST">
+                        <button type="submit" class="btn btn-start">Start Trip B</button>
+                    </form>
+                {% endif %}
+            </div>
         </div>
 
+        <!-- SETTINGS & HISTORY CARD -->
         <div class="card" style="text-align: left;">
-            <details style="margin-bottom: 10px;">
+            <details style="margin-bottom: 12px;">
                 <summary>⚙️ Tariff & Price Settings</summary>
                 <form action="{{ url_for('update_rates') }}" method="POST">
                     <div class="rates-form">
@@ -225,10 +254,11 @@ HTML_TEMPLATE = """
                 </form>
             </details>
 
-            <h3 style="margin-top: 10px; font-size: 1.1rem; color: #fff;">Recent Trips</h3>
+            <h3 style="margin-top: 0; font-size: 1.05rem; color: #fff;">Trip History</h3>
             <table>
                 <thead>
                     <tr>
+                        <th>Type</th>
                         <th>Date</th>
                         <th>Dist</th>
                         <th>Bat</th>
@@ -239,6 +269,11 @@ HTML_TEMPLATE = """
                 <tbody>
                     {% for item in completed_trips %}
                     <tr>
+                        <td>
+                            <span class="badge {{ 'badge-a' if item.trip.trip_type == 'A' else 'badge-b' }}">
+                                {{ item.trip.trip_type }}
+                            </span>
+                        </td>
                         <td>{{ item.trip.end_time[:10] }}</td>
                         <td>{{ "%.1f"|format(item.trip.distance or 0) }} km</td>
                         <td>{{ "%.0f"|format(item.trip.start_battery - item.trip.end_battery) }}%</td>
@@ -246,7 +281,7 @@ HTML_TEMPLATE = """
                         <td class="cost-highlight">RM {{ "%.2f"|format(item.cost_per_km) }}</td>
                     </tr>
                     {% else %}
-                    <tr><td colspan="5" style="text-align: center; color: #666;">No trips logged yet</td></tr>
+                    <tr><td colspan="6" style="text-align: center; color: #666;">No trips logged yet</td></tr>
                     {% endfor %}
                 </tbody>
             </table>
@@ -261,11 +296,15 @@ HTML_TEMPLATE = """
 def index():
   rates = load_rates()
   db = get_db()
-  active_trip = db.execute(
-      "SELECT * FROM trips WHERE status = 'ACTIVE' LIMIT 1"
+  active_a = db.execute(
+      "SELECT * FROM trips WHERE trip_type = 'A' AND status = 'ACTIVE' LIMIT 1"
   ).fetchone()
+  active_b = db.execute(
+      "SELECT * FROM trips WHERE trip_type = 'B' AND status = 'ACTIVE' LIMIT 1"
+  ).fetchone()
+
   raw_completed = db.execute(
-      "SELECT * FROM trips WHERE status = 'COMPLETED' ORDER BY id DESC LIMIT 5"
+      "SELECT * FROM trips WHERE status = 'COMPLETED' ORDER BY id DESC LIMIT 10"
   ).fetchall()
 
   completed_trips = []
@@ -284,38 +323,24 @@ def index():
 
   return render_template_string(
       HTML_TEMPLATE,
-      active_trip=active_trip,
+      active_a=active_a,
+      active_b=active_b,
       completed_trips=completed_trips,
       rates=rates,
   )
 
 
-@app.route("/update_rates", methods=["POST"])
-def update_rates():
-  rates = load_rates()
-  try:
-    rates["fuel_price_per_l"] = float(
-        request.form.get("fuel_price_per_l", rates["fuel_price_per_l"])
-    )
-    rates["elec_price_per_kwh"] = float(
-        request.form.get("elec_price_per_kwh", rates["elec_price_per_kwh"])
-    )
-    save_rates(rates)
-  except ValueError:
-    pass
-  return redirect(url_for("index"))
-
-
-@app.route("/start_trip", methods=["POST"])
-def start_trip():
+@app.route("/start_trip/<trip_type>", methods=["POST"])
+def start_trip(trip_type):
   data = fetch_car_telemetry()
   db = get_db()
   db.execute(
       """
-        INSERT INTO trips (start_time, start_odo, start_battery, start_fuel, status)
-        VALUES (?, ?, ?, ?, 'ACTIVE')
+        INSERT INTO trips (trip_type, start_time, start_odo, start_battery, start_fuel, status)
+        VALUES (?, ?, ?, ?, ?, 'ACTIVE')
     """,
       [
+          trip_type,
           datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
           data["odo"],
           data["battery"],
@@ -326,12 +351,13 @@ def start_trip():
   return redirect(url_for("index"))
 
 
-@app.route("/end_trip", methods=["POST"])
-def end_trip():
+@app.route("/end_trip/<trip_type>", methods=["POST"])
+def end_trip(trip_type):
   data = fetch_car_telemetry()
   db = get_db()
   active_trip = db.execute(
-      "SELECT * FROM trips WHERE status = 'ACTIVE' LIMIT 1"
+      "SELECT * FROM trips WHERE trip_type = ? AND status = 'ACTIVE' LIMIT 1",
+      [trip_type],
   ).fetchone()
 
   if active_trip:
@@ -356,6 +382,22 @@ def end_trip():
     )
     db.commit()
 
+  return redirect(url_for("index"))
+
+
+@app.route("/update_rates", methods=["POST"])
+def update_rates():
+  rates = load_rates()
+  try:
+    rates["fuel_price_per_l"] = float(
+        request.form.get("fuel_price_per_l", rates["fuel_price_per_l"])
+    )
+    rates["elec_price_per_kwh"] = float(
+        request.form.get("elec_price_per_kwh", rates["elec_price_per_kwh"])
+    )
+    save_rates(rates)
+  except ValueError:
+    pass
   return redirect(url_for("index"))
 
 
