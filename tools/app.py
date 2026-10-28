@@ -100,10 +100,13 @@ def fetch_car_telemetry():
       conn.close()
 
       if row and server:
-        decoded = server.decode(row[1])
+        decoded = server.decode(row[7])
+        battery_pct = decoded.get("battery", 0.0)
+        battery_kwh = round((battery_pct / 100.0) * 18.3, 2)
+        
         return {
             "odo": decoded.get("odometer", 0.0),
-            "battery": decoded.get("battery", 0.0),
+            "battery": battery_kwh,
             "fuel": decoded.get("fuel_pct", 0.0),
         }
 
