@@ -92,12 +92,9 @@ def fetch_car_telemetry():
 
     db_path = getattr(server, "DB", "carlinko.db")
     if os.path.exists(db_path):
-      # Added timeout=5.0 to handle concurrent SQLite writes while driving
       conn = sqlite3.connect(db_path, timeout=5.0)
       cursor = conn.cursor()
-      cursor.execute(
-           "SELECT * FROM telemetry ORDER BY ts DESC LIMIT 1"
-      )
+      cursor.execute("SELECT * FROM telemetry ORDER BY ts DESC LIMIT 1")
       row = cursor.fetchone()
       conn.close()
 
@@ -105,18 +102,18 @@ def fetch_car_telemetry():
         raw_hex = row[7]
         decoded = server.decode(raw_hex) if raw_hex else {}
 
-        # 1. Odometer fallback logic
+        # Odometer fallback
         odo = (
             decoded.get("odometer")
             or decoded.get("odo_guess")
             or decoded.get("odo", 0.0)
         )
 
-        # 2. Battery percentage -> kWh conversion (using Tiggo 7 18.3 kWh pack)
+        # Battery % -> kWh conversion
         battery_pct = decoded.get("battery", 0.0) or 0.0
         battery_kwh = round((battery_pct / 100.0) * 18.3, 2)
 
-        # 3. Fuel tank percentage: Server decode fallback to raw byte 21
+        # Fuel % fallback to byte 21
         fuel = decoded.get("fuel_pct")
         if fuel is None and raw_hex:
           try:
@@ -126,11 +123,26 @@ def fetch_car_telemetry():
           except Exception:
             fuel = 0.0
 
+        # --- NEW: Extract 12V Battery & Minimum Tyre Status ---
+        volt12 = decoded.get("volt12", 0.0)
+
+        # Look for tyre keys (e.g., fl_pressure, fr_pressure, rl_pressure, rr_pressure or similar)
+        # Taking the minimum out of the 4 available tyre readings/statuses
+        tyre_vals = []
+        for k, v in decoded.items():
+          if "tyre" in k.lower() or "tire" in k.lower() or k.endswith("_pressure"):
+            if isinstance(v, (int, float)):
+              tyre_vals.append(v)
+        
+        min_tyre = min(tyre_vals) if tyre_vals else "OK"
+
         return {
             "status": "ok",
             "odo": float(odo or 0.0),
             "battery": float(battery_kwh),
             "fuel": float(fuel or 0.0),
+            "volt12": float(volt12 or 0.0),
+            "min_tyre": min_tyre,
             "msg": "Telemetry active",
         }
 
@@ -139,6 +151,8 @@ def fetch_car_telemetry():
         "odo": 0.0,
         "battery": 0.0,
         "fuel": 0.0,
+        "volt12": 0.0,
+        "min_tyre": "--",
         "msg": "No database found",
     }
   except Exception as e:
@@ -148,9 +162,10 @@ def fetch_car_telemetry():
         "odo": 0.0,
         "battery": 0.0,
         "fuel": 0.0,
+        "volt12": 0.0,
+        "min_tyre": "Error",
         "msg": str(e),
     }
-
 
 def calculate_trip_cost(
     distance, start_bat, end_bat, start_fuel, end_fuel, rates
@@ -196,7 +211,22 @@ HTML_TEMPLATE = """
         .led-ok { background-color: #2ecc71; box-shadow: 0 0 10px #2ecc71; }
         .led-empty { background-color: #f39c12; box-shadow: 0 0 10px #f39c12; }
         .led-error { background-color: #e74c3c; box-shadow: 0 0 10px #e74c3c; }
-
+        /* ADD YOUR NEW CSS HERE: */
+        .sub-status-bar {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            background: #1e1e1e;
+            padding: 8px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            font-size: 0.85rem;
+            color: #b0bec5;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        }
+        .sub-status-bar strong {
+            color: #4caf50;
+        }
         .trips-grid { display: flex; gap: 12px; margin-bottom: 16px; }
         .card { background: #1e1e1e; border-radius: 12px; padding: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); text-align: center; flex: 1; }
         .card-title { font-size: 1.1rem; font-weight: bold; margin-bottom: 12px; color: #64b5f6; }
@@ -226,6 +256,12 @@ HTML_TEMPLATE = """
         <div class="header-box">
             <span id="led-status" class="led-indicator led-empty" title="Checking status..."></span>
             <h1>🚗 PHEV Dual-Trip Tracker</h1>
+        </div>
+        <!-- NEW: Sub-header Status Bar for 12V and Tyre Min -->
+        <div class="sub-status-bar">
+            <span>⚡ 12V: <strong id="val-volt12">{{ "%.1f"|format(telemetry.volt12) }}V</strong></span>
+            <span>|</span>
+            <span>🛞 Tyre Min: <strong id="val-tyre">{{ telemetry.min_tyre }}</strong></span>
         </div>
         
         <div class="trips-grid">
@@ -436,6 +472,7 @@ def index():
       active_b=active_b_dict,
       completed_trips=completed_trips,
       rates=rates,
+      telemetry=current_telemetry,  # <--- Pass telemetry object here
   )
 
 
