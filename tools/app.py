@@ -101,7 +101,7 @@ def fetch_car_telemetry():
       row = cursor.fetchone()
       conn.close()
 
-      if row and server and len(row) > 7::
+      if row and server and len(row) > 7:
         raw_hex = row[7]
         decoded = server.decode(raw_hex) if raw_hex else {}
 
