@@ -1,8 +1,8 @@
+from datetime import datetime
 import json
 import os
 import sqlite3
 import sys
-from datetime import datetime
 from flask import Flask, g, redirect, render_template_string, request, url_for
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -85,13 +85,15 @@ def init_db():
 
 
 def fetch_car_telemetry():
+  """Fetch latest car telemetry from carlinko.db safely."""
   try:
     if hasattr(server, "live_poll"):
       server.live_poll()
 
     db_path = getattr(server, "DB", "carlinko.db")
     if os.path.exists(db_path):
-      conn = sqlite3.connect(db_path)
+      # Added timeout=5.0 to handle concurrent SQLite writes while driving
+      conn = sqlite3.connect(db_path, timeout=5.0)
       cursor = conn.cursor()
       cursor.execute(
           "SELECT timestamp, raw FROM telemetry ORDER BY timestamp DESC LIMIT 1"
@@ -100,23 +102,59 @@ def fetch_car_telemetry():
       conn.close()
 
       if row and server:
-        decoded = server.decode(row[7])
-        battery_pct = decoded.get("battery", 0.0)
+        raw_hex = row[1]
+        decoded = server.decode(raw_hex) if raw_hex else {}
+
+        # 1. Odometer fallback logic
+        odo = (
+            decoded.get("odometer")
+            or decoded.get("odo_guess")
+            or decoded.get("odo", 0.0)
+        )
+
+        # 2. Battery percentage -> kWh conversion (using Tiggo 7 18.3 kWh pack)
+        battery_pct = decoded.get("battery", 0.0) or 0.0
         battery_kwh = round((battery_pct / 100.0) * 18.3, 2)
-        
+
+        # 3. Fuel tank percentage: Server decode fallback to raw byte 21
+        fuel = decoded.get("fuel_pct")
+        if fuel is None and raw_hex:
+          try:
+            b = bytes.fromhex(raw_hex)
+            if len(b) > 21:
+              fuel = b[21]
+          except Exception:
+            fuel = 0.0
+
         return {
-            "odo": decoded.get("odometer", 0.0),
-            "battery": battery_kwh,
-            "fuel": decoded.get("fuel_pct", 0.0),
+            "status": "ok",
+            "odo": float(odo or 0.0),
+            "battery": float(battery_kwh),
+            "fuel": float(fuel or 0.0),
+            "msg": "Telemetry active",
         }
 
-    return {"odo": 0.0, "battery": 0.0, "fuel": 0.0}
+    return {
+        "status": "empty_db",
+        "odo": 0.0,
+        "battery": 0.0,
+        "fuel": 0.0,
+        "msg": "No database found",
+    }
   except Exception as e:
     print(f"Telemetry fetch error: {e}")
-    return {"odo": 0.0, "battery": 0.0, "fuel": 0.0}
+    return {
+        "status": "error",
+        "odo": 0.0,
+        "battery": 0.0,
+        "fuel": 0.0,
+        "msg": str(e),
+    }
 
 
-def calculate_trip_cost(distance, start_bat, end_bat, start_fuel, end_fuel, rates):
+def calculate_trip_cost(
+    distance, start_bat, end_bat, start_fuel, end_fuel, rates
+):
   if not distance or distance <= 0:
     return 0.0, 0.0
 
@@ -133,6 +171,7 @@ def calculate_trip_cost(distance, start_bat, end_bat, start_fuel, end_fuel, rate
 
   return total_cost, cost_per_km
 
+
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -143,7 +182,21 @@ HTML_TEMPLATE = """
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #121212; color: #e0e0e0; margin: 0; padding: 16px; display: flex; justify-content: center; }
         .container { width: 100%; max-width: 520px; }
-        h1 { text-align: center; font-size: 1.4rem; margin-bottom: 16px; color: #fff; }
+        .header-box { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 16px; }
+        h1 { font-size: 1.4rem; margin: 0; color: #fff; }
+        
+        /* LED Indicator Styles */
+        .led-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            transition: background-color 0.3s ease, box-shadow 0.3s ease;
+        }
+        .led-ok { background-color: #2ecc71; box-shadow: 0 0 10px #2ecc71; }
+        .led-empty { background-color: #f39c12; box-shadow: 0 0 10px #f39c12; }
+        .led-error { background-color: #e74c3c; box-shadow: 0 0 10px #e74c3c; }
+
         .trips-grid { display: flex; gap: 12px; margin-bottom: 16px; }
         .card { background: #1e1e1e; border-radius: 12px; padding: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); text-align: center; flex: 1; }
         .card-title { font-size: 1.1rem; font-weight: bold; margin-bottom: 12px; color: #64b5f6; }
@@ -170,7 +223,10 @@ HTML_TEMPLATE = """
 </head>
 <body>
     <div class="container">
-        <h1>🚗 PHEV Dual-Trip Tracker</h1>
+        <div class="header-box">
+            <span id="led-status" class="led-indicator led-empty" title="Checking status..."></span>
+            <h1>🚗 PHEV Dual-Trip Tracker</h1>
+        </div>
         
         <div class="trips-grid">
             <!-- TRIP A CARD -->
@@ -288,6 +344,35 @@ HTML_TEMPLATE = """
             </table>
         </div>
     </div>
+
+    <!-- Live LED Diagnosis Script -->
+    <script>
+        function checkTelemetryStatus() {
+            fetch('/api/telemetry_status')
+                .then(response => response.json())
+                .then(data => {
+                    const led = document.getElementById('led-status');
+                    led.className = 'led-indicator';
+                    if (data.status === 'ok') {
+                        led.classList.add('led-ok');
+                        led.title = "Telemetry Active (Live)";
+                    } else if (data.status === 'empty_db') {
+                        led.classList.add('led-empty');
+                        led.title = "No Telemetry Records";
+                    } else {
+                        led.classList.add('led-error');
+                        led.title = "Telemetry Error: " + (data.msg || 'Fetch failed');
+                    }
+                })
+                .catch(err => {
+                    const led = document.getElementById('led-status');
+                    led.className = 'led-indicator led-error';
+                    led.title = "Server Connection Failed";
+                });
+        }
+        setInterval(checkTelemetryStatus, 5000);
+        checkTelemetryStatus();
+    </script>
 </body>
 </html>
 """
@@ -304,7 +389,6 @@ def index():
       "SELECT * FROM trips WHERE trip_type = 'B' AND status = 'ACTIVE' LIMIT 1"
   ).fetchone()
 
-  # Calculate live active mileage if active
   current_telemetry = fetch_car_telemetry()
   current_odo = current_telemetry.get("odo", 0.0)
 
@@ -334,7 +418,6 @@ def index():
         {"trip": trip, "total_cost": total_cost, "cost_per_km": cost_per_km}
     )
 
-  # Inject live distance into active objects for template display
   active_a_dict = dict(active_a) if active_a else None
   if active_a_dict:
     active_a_dict["live_dist"] = (
@@ -354,6 +437,13 @@ def index():
       completed_trips=completed_trips,
       rates=rates,
   )
+
+
+@app.route("/api/telemetry_status", methods=["GET"])
+def telemetry_status_endpoint():
+  """JSON endpoint powering the frontend LED indicator."""
+  data = fetch_car_telemetry()
+  return jsonify(data)
 
 
 @app.route("/start_trip/<trip_type>", methods=["POST"])
