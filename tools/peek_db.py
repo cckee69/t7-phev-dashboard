@@ -39,9 +39,17 @@ def peek_telemetry(limit=10):
         for i, row in enumerate(rows, 1):
             row_dict = dict(zip(columns, row))
             ts = row_dict.get("ts", "Unknown Time")
+            # Safely handle both epoch integers/floats and pre-formatted text strings
+            if isinstance(ts_val, (int, float)):
+                try:
+                    readable_ts = datetime.fromtimestamp(ts_val).strftime("%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    readable_ts = str(ts_val)
+            else:
+                readable_ts = str(ts_val)
             raw_hex = row_dict.get("raw", row_dict.get("hex", row[7] if len(row) > 7 else "N/A"))
 
-            print(f"[{i}] Timestamp: {ts}")
+            print(f"[{i}] Timestamp: {readable_ts}")
             print(f"    Raw Hex: {raw_hex}")
 
             # Try decoding if server.decode is available
