@@ -96,13 +96,13 @@ def fetch_car_telemetry():
       conn = sqlite3.connect(db_path, timeout=5.0)
       cursor = conn.cursor()
       cursor.execute(
-          "SELECT timestamp, raw FROM telemetry ORDER BY timestamp DESC LIMIT 1"
+           "SELECT * FROM telemetry ORDER BY ts DESC LIMIT 1"
       )
       row = cursor.fetchone()
       conn.close()
 
-      if row and server:
-        raw_hex = row[1]
+      if row and server and len(row) > 7::
+        raw_hex = row[7]
         decoded = server.decode(raw_hex) if raw_hex else {}
 
         # 1. Odometer fallback logic
