@@ -128,15 +128,36 @@ def fetch_car_telemetry():
         # --- NEW: Extract 12V Battery & Minimum Tyre Status ---
         volt12 = decoded.get("volt12", 0.0)
 
-        # Look for tyre keys (e.g., fl_pressure, fr_pressure, rl_pressure, rr_pressure or similar)
-        # Taking the minimum out of the 4 available tyre readings/statuses
+# --- ENHANCED: Tyre Delta & Health Warning Check ---
         tyre_vals = []
         for k, v in decoded.items():
-          if "tyre" in k.lower() or "tire" in k.lower() or k.endswith("_pressure"):
-            if isinstance(v, (int, float)):
-              tyre_vals.append(v)
-        
-        min_tyre = min(tyre_vals) if tyre_vals else "OK"
+            if "tyre" in k.lower() or "tire" in k.lower() or k.endswith("_pressure"):
+                if isinstance(v, (int, float)):
+                    tyre_vals.append(v)
+
+        if tyre_vals and len(tyre_vals) >= 2:
+            min_tyre = min(tyre_vals)
+            # Create a list of the other tyres (excluding the minimum)
+            others = [v for v in tyre_vals if v != min_tyre]
+            
+            if others:
+                avg_others = sum(others) / len(others)
+                if avg_others > 0:
+                    # Calculate percentage drop of the minimum tyre compared to the average of the rest
+                    delta_pct = (avg_others - min_tyre) / avg_others * 100
+                    
+                    if delta_pct > 30:
+                        min_tyre = f"ALERT ({int(min_tyre)} - {int(delta_pct)}%)"
+                    elif delta_pct > 10:
+                        min_tyre = f"Warning ({int(min_tyre)} - {int(delta_pct)}%)"
+                    else:
+                        min_tyre = f"OK ({int(min_tyre)})"
+                else:
+                    min_tyre = f"OK ({int(min_tyre)})"
+            else:
+                min_tyre = f"OK ({int(min_tyre)})"
+        else:
+            min_tyre = tyre_vals[0] if tyre_vals else "OK"
 
         return {
             "status": "ok",
