@@ -3,7 +3,7 @@ import json
 import os
 import sqlite3
 import sys
-from flask import Flask, g, redirect, render_template_string, request, url_for
+from flask import Flask, g, redirect, render_template_string, request, url_for,jsonify
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 try:
