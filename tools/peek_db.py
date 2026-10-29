@@ -39,7 +39,7 @@ def peek_telemetry(limit=10):
 
         for i, row in enumerate(rows, 1):
             row_dict = dict(zip(columns, row))
-            ts = row_dict.get("ts", "Unknown Time")
+            ts_val = row_dict.get("ts", "Unknown Time")
             # Safely handle both epoch integers/floats and pre-formatted text strings
             if isinstance(ts_val, (int, float)):
                 try:
