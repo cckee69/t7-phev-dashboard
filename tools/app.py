@@ -8,8 +8,10 @@ from flask import Flask, g, redirect, render_template_string, request, url_for,j
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 try:
   import server
+  from server import live_poll, DB, decode
 except ImportError:
   server = None
+  live_poll = DB = decode = None
 
 app = Flask(__name__)
 DATABASE = "trips.db"
@@ -88,9 +90,9 @@ def fetch_car_telemetry():
   """Fetch latest car telemetry from carlinko.db safely."""
   try:
     if hasattr(server, "live_poll"):
-      server.live_poll()
+      live_poll()
 
-    db_path = getattr(server, "DB", "carlinko.db")
+    db_path = DB if DB else "carlinko.db"
     if os.path.exists(db_path):
       conn = sqlite3.connect(db_path, timeout=5.0)
       cursor = conn.cursor()
@@ -100,7 +102,7 @@ def fetch_car_telemetry():
 
       if row and server and len(row) > 7:
         raw_hex = row[7]
-        decoded = server.decode(raw_hex) if raw_hex else {}
+        decoded = decode(raw_hex) if raw_hex else {}
 
         # Odometer fallback
         odo = (
