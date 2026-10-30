@@ -595,7 +595,7 @@ def start_trip(trip_type):
       [
           trip_type,
           datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-          data.get("odometer", 0.0),  # Matches decoder key: "odometer"
+          data.get("odo", 0.0),  # Matches decoder key: "odometer"
           data.get("battery", 0),       # Matches decoder key: "battery"
           data.get("fuel_pct", 0),      # Matches decoder key: "fuel_pct"
       ],
