@@ -327,7 +327,7 @@ HTML_TEMPLATE = """
                     <div class="status-text">In Progress...</div>
                     <div class="stat-value" id="timer-a">-- hr -- min</div>
                     <div class="stat-label">Elapsed Time</div>
-                    <div class="stat-value">{{ "%.1f"|format(active_a.live_dist) if active_a.live_dist > 0 else '0.0' }} km</div>
+                    <div class="stat-value" id="trip-a-mileage-value">{{ "%.1f"|format(active_a.live_dist) if active_a.live_dist > 0 else '0.0' }} km</div>
                     <div class="stat-label">Active Mileage</div>
                     <form action="{{ url_for('end_trip', trip_type='A') }}" method="POST">
                         <button type="submit" class="btn btn-end">End Trip A</button>
@@ -358,7 +358,7 @@ HTML_TEMPLATE = """
                     <div class="status-text">In Progress...</div>
                     <div class="stat-value" id="timer-b">-- hr -- min</div>
                     <div class="stat-label">Elapsed Time</div>
-                    <div class="stat-value">{{ "%.1f"|format(active_b.live_dist) if active_b.live_dist > 0 else '0.0' }} km</div>
+                    <div class="stat-value" id="trip-b-mileage-value">{{ "%.1f"|format(active_b.live_dist) if active_b.live_dist > 0 else '0.0' }} km</div>
                     <div class="stat-label">Active Mileage</div>
                     <form action="{{ url_for('end_trip', trip_type='B') }}" method="POST">
                         <button type="submit" class="btn btn-end">End Trip B</button>
