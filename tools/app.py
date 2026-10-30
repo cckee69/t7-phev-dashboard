@@ -434,11 +434,18 @@ HTML_TEMPLATE = """
                         }
                     }
 
-                    // Update the mileage element live on the screen
-                    if (data.odo !== undefined) {
-                        const mileageEl = document.getElementById('mileage-value');
-                        if (mileageEl) {
-                            mileageEl.innerText = data.odo;
+                    // Update Trip A and Trip B live active mileage on the screen
+                    if (data.dist_a !== undefined) {
+                        const distAEl = document.getElementById('trip-a-mileage-value'); // Make sure this matches your Trip A element ID
+                        if (distAEl) {
+                            distAEl.innerText = data.dist_a.toFixed(1) + ' km';
+                        }
+                    }
+
+                    if (data.dist_b !== undefined) {
+                        const distBEl = document.getElementById('trip-b-mileage-value'); // Make sure this matches your Trip B element ID
+                        if (distBEl) {
+                            distBEl.innerText = data.dist_b.toFixed(1) + ' km';
                         }
                     }
                 })
@@ -525,8 +532,31 @@ def index():
 
 @app.route("/api/telemetry_status", methods=["GET"])
 def telemetry_status_endpoint():
-  """JSON endpoint powering the frontend LED indicator."""
+  """JSON endpoint powering the frontend LED indicator and live metrics."""
+  db = get_db()
+  active_a = db.execute(
+      "SELECT * FROM trips WHERE trip_type = 'A' AND status = 'ACTIVE' LIMIT 1"
+  ).fetchone()
+  active_b = db.execute(
+      "SELECT * FROM trips WHERE trip_type = 'B' AND status = 'ACTIVE' LIMIT 1"
+  ).fetchone()
+
   data = fetch_car_telemetry()
+  current_odo = data.get("odo", 0.0)
+
+  # Calculate live distances for active trips
+  live_dist_a = 0.0
+  if active_a and current_odo > 0:
+    live_dist_a = max(0.0, current_odo - active_a["start_odo"])
+
+  live_dist_b = 0.0
+  if active_b and current_odo > 0:
+    live_dist_b = max(0.0, current_odo - active_b["start_odo"])
+
+  # Attach computed distances to the JSON dictionary
+  data["dist_a"] = live_dist_a
+  data["dist_b"] = live_dist_b
+
   return jsonify(data)
 
 
