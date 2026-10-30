@@ -4,6 +4,7 @@ import os
 import sqlite3
 import sys
 from flask import Flask, g, redirect, render_template_string, request, url_for,jsonify
+import time 
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 try:
@@ -85,113 +86,117 @@ def init_db():
       pass
     db.commit()
 
-
 def fetch_car_telemetry():
-  """Fetch latest car telemetry from carlinko.db safely."""
-  try:
-    if hasattr(server, "live_poll"):
-      live_poll()
+    """Fetch latest car telemetry from carlinko.db safely and determine car state using speed and a holding grace period."""
+    try:
+        if hasattr(server, "live_poll"):
+            live_poll()
 
-    db_path = DB if DB else "carlinko.db"
-    if os.path.exists(db_path):
-      conn = sqlite3.connect(db_path, timeout=5.0)
-      cursor = conn.cursor()
-      cursor.execute("SELECT * FROM telemetry ORDER BY ts DESC LIMIT 1")
-      row = cursor.fetchone()
-      conn.close()
-
-      if row and server and len(row) > 7:
-        raw_hex = row[7]
-        decoded = decode(raw_hex) if raw_hex else {}
-
-        # Odometer fallback
-        odo = (
-            decoded.get("odometer")
-            or decoded.get("odo_guess")
-            or decoded.get("odo", 0.0)
-        )
-
-        # Battery % -> kWh conversion
-        battery_pct = decoded.get("battery", 0.0) or 0.0
-        battery_kwh = round((battery_pct / 100.0) * 18.3, 2)
-
-        # Fuel % fallback to byte 21
-        fuel_pct = decoded.get("fuel_pct")
-        if fuel_pct is None and raw_hex:
-          try:
-            b = bytes.fromhex(raw_hex)
-            if len(b) > 21:
-              fuel_pct = b[21]
-          except Exception:
-            fuel_pct = 0.0
-
-        # --- NEW: Extract 12V Battery & Minimum Tyre Status ---
-        volt12 = decoded.get("volt12", 0.0)
-
-# --- ENHANCED: Tyre Delta & Health Warning Check ---
-        tyre_vals = []
-        for k, v in decoded.items():
-            if "tyre" in k.lower() or "tire" in k.lower() or k.endswith("_pressure"):
-                if isinstance(v, (int, float)):
-                    tyre_vals.append(v)
-
-        if tyre_vals and len(tyre_vals) >= 2:
-            min_tyre = min(tyre_vals)
-            # Create a list of the other tyres (excluding the minimum)
-            others = [v for v in tyre_vals if v != min_tyre]
+        db_path = DB if DB else "carlinko.db"
+        if os.path.exists(db_path):
+            conn = sqlite3.connect(db_path, timeout=5.0)
+            cursor = conn.cursor()
             
-            if others:
-                avg_others = sum(others) / len(others)
-                if avg_others > 0:
-                    # Calculate percentage drop of the minimum tyre compared to the average of the rest
-                    delta_pct = (avg_others - min_tyre) / avg_others * 100
-                    
-                    if delta_pct > 30:
-                        min_tyre = f"ALERT ({int(min_tyre)} - {int(delta_pct)}%)"
-                    elif delta_pct > 10:
-                        min_tyre = f"Warning ({int(min_tyre)} - {int(delta_pct)}%)"
-                    else:
-                        min_tyre = f"OK ({int(min_tyre)})"
-                else:
-                    min_tyre = f"OK ({int(min_tyre)})"
+            # Fetch the latest telemetry record
+            cursor.execute("SELECT ts, online, raw FROM telemetry ORDER BY ts DESC LIMIT 1")
+            latest_row = cursor.fetchone()
+            
+            if not latest_row:
+                conn.close()
+                return {
+                    "status": "empty_db", "car_status": "OFFLINE", "odo": 0.0,
+                    "battery": 0.0, "battery_kwh": 0.0, "fuel_pct": 0.0,
+                    "volt12": 0.0, "min_tyre": "--", "msg": "No telemetry records"
+                }
+
+            latest_ts, online_flag, raw_hex = latest_row[0], latest_row[1], latest_row[2]
+            age = time.time() - latest_ts
+
+            # Check recent window (HOLD = 600s) for any movement (speed > 0)
+            hold_window = time.time() - 120
+            cursor.execute("SELECT raw FROM telemetry WHERE ts >= ?", (hold_window,))
+            recent_rows = cursor.fetchall()
+            conn.close()
+
+            current_speed = 0.0
+            has_recent_movement = False
+            
+            if raw_hex:
+                decoded_latest = decode(raw_hex)
+                current_speed = decoded_latest.get("speed", 0.0) or 0.0
+
+            for r in recent_rows:
+                if r[0]:
+                    dec = decode(r[0])
+                    if (dec.get("speed", 0.0) or 0.0) > 0.0:
+                        has_recent_movement = True
+                        break
+
+            # --- State Machine Rules ---
+            if age > 600 or online_flag == 0:
+                car_status = "OFFLINE"
+            elif current_speed > 0.0 or has_recent_movement:
+                car_status = "ACTIVE"  # Covers moving now AND holding through traffic lights/stops
             else:
-                min_tyre = f"OK ({int(min_tyre)})"
-        else:
-            min_tyre = tyre_vals[0] if tyre_vals else "OK"
+                car_status = "PARKED"  # True parked/idle state after grace period expires
+
+            # Decode metrics from latest raw hex
+            decoded = decode(raw_hex) if raw_hex else {}
+
+            odo = (
+                decoded.get("odometer")
+                or decoded.get("odo_guess")
+                or decoded.get("odo", 0.0)
+            )
+
+            battery_pct = decoded.get("battery", 0.0) or 0.0
+            battery_kwh = round((battery_pct / 100.0) * 18.3, 2)
+
+            fuel_pct = decoded.get("fuel_pct")
+            if fuel_pct is None and raw_hex:
+                try:
+                    b = bytes.fromhex(raw_hex)
+                    if len(b) > 21:
+                        fuel_pct = b[21]
+                except Exception:
+                    fuel_pct = 0.0
+
+            volt12 = decoded.get("volt12", 0.0)
+
+            # Tyre health check
+            tyre_vals = []
+            for k, v in decoded.items():
+                if "tyre" in k.lower() or "tire" in k.lower() or k.endswith("_pressure"):
+                    if isinstance(v, (int, float)):
+                        tyre_vals.append(v)
+
+            min_tyre = tyre_vals[0] if tyre_vals else "--"
+
+            return {
+                "status": "ok",
+                "car_status": car_status,
+                "odo": float(odo or 0.0),
+                "battery": float(battery_pct),
+                "battery_kwh": float(battery_kwh),
+                "fuel_pct": float(fuel_pct or 0.0),
+                "volt12": float(volt12 or 0.0),
+                "min_tyre": min_tyre,
+                "msg": f"Telemetry active ({car_status})",
+            }
 
         return {
-            "status": "ok",
-            "odo": float(odo or 0.0),
-            "battery": float(battery_pct),        # Keep as raw percentage (e.g. 53.0) for trips/cost!
-            "battery_kwh": float(battery_kwh),    # Keep kWh separate if needed for UI display
-            "fuel_pct": float(fuel or 0.0),
-            "volt12": float(volt12 or 0.0),
-            "min_tyre": min_tyre,
-            "msg": "Telemetry active",
+            "status": "empty_db", "car_status": "OFFLINE", "odo": 0.0,
+            "battery": 0.0, "battery_kwh": 0.0, "fuel_pct": 0.0,
+            "volt12": 0.0, "min_tyre": "--", "msg": "No database found"
+        }
+    except Exception as e:
+        print(f"Telemetry fetch error: {e}")
+        return {
+            "status": "error", "car_status": "OFFLINE", "odo": 0.0,
+            "battery": 0.0, "battery_kwh": 0.0, "fuel_pct": 0.0,
+            "volt12": 0.0, "min_tyre": "Error", "msg": str(e)
         }
 
-    return {
-        "status": "empty_db",
-        "odo": 0.0,
-        "battery": 0.0,
-        "battery_kwh": 0.0,
-        "fuel_pct": 0.0,
-        "volt12": 0.0,
-        "min_tyre": "--",
-        "msg": "No database found",
-    }
-  except Exception as e:
-    print(f"Telemetry fetch error: {e}")
-    return {
-        "status": "error",
-        "odo": 0.0,
-        "battery": 0.0,
-        "battery_kwh": 0.0,
-        "fuel_pct": 0.0,
-        "volt12": 0.0,
-        "min_tyre": "Error",
-        "msg": str(e),
-    }
 
 def calculate_trip_cost(
     distance, start_bat, end_bat, start_fuel, end_fuel, rates
@@ -416,15 +421,15 @@ HTML_TEMPLATE = """
                     const led = document.getElementById('led-status');
                     if (led) {
                         led.className = 'led-indicator';
-                        if (data.status === 'ok') {
+                        if (data.car_status === 'ACTIVE') {
                             led.classList.add('led-ok');
-                            led.title = "Telemetry Active (Live)";
-                        } else if (data.status === 'empty_db') {
+                            led.title = "Car Status: ACTIVE (Moving / Awake)";
+                        } else if (data.car_status === 'PARKED') {
                             led.classList.add('led-empty');
-                            led.title = "No Telemetry Records";
+                            led.title = "Car Status: PARKED (Idle / Engine On)";
                         } else {
                             led.classList.add('led-error');
-                            led.title = "Telemetry Error: " + (data.msg || 'Fetch failed');
+                            led.title = "Car Status: OFFLINE / Dark";
                         }
                     }
 
