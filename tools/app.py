@@ -88,6 +88,7 @@ def init_db():
 
 def fetch_car_telemetry():
     """Fetch latest car telemetry from carlinko.db safely and determine car state using speed and a holding grace period."""
+    HOLD = 120 # idle time when speed = 0
     try:
         if hasattr(server, "live_poll"):
             live_poll()
@@ -113,7 +114,7 @@ def fetch_car_telemetry():
             age = time.time() - latest_ts
 
             # Check recent window (HOLD = 600s) for any movement (speed > 0)
-            hold_window = time.time() - 120
+            hold_window = time.time() - HOLD
             cursor.execute("SELECT raw FROM telemetry WHERE ts >= ?", (hold_window,))
             recent_rows = cursor.fetchall()
             conn.close()
@@ -133,7 +134,7 @@ def fetch_car_telemetry():
                         break
 
             # --- State Machine Rules ---
-            if age > 600 or online_flag == 0:
+            if age > HOLD or online_flag == 0:
                 car_status = "OFFLINE"
             elif current_speed > 0.0 or has_recent_movement:
                 car_status = "ACTIVE"  # Covers moving now AND holding through traffic lights/stops
