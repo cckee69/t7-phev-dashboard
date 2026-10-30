@@ -116,14 +116,14 @@ def fetch_car_telemetry():
         battery_kwh = round((battery_pct / 100.0) * 18.3, 2)
 
         # Fuel % fallback to byte 21
-        fuel = decoded.get("fuel_pct")
-        if fuel is None and raw_hex:
+        fuel_pct = decoded.get("fuel_pct")
+        if fuel_pct is None and raw_hex:
           try:
             b = bytes.fromhex(raw_hex)
             if len(b) > 21:
-              fuel = b[21]
+              fuel_pct = b[21]
           except Exception:
-            fuel = 0.0
+            fuel_pct = 0.0
 
         # --- NEW: Extract 12V Battery & Minimum Tyre Status ---
         volt12 = decoded.get("volt12", 0.0)
@@ -162,8 +162,9 @@ def fetch_car_telemetry():
         return {
             "status": "ok",
             "odo": float(odo or 0.0),
-            "battery": float(battery_kwh),
-            "fuel": float(fuel or 0.0),
+            "battery": float(battery_pct),        # Keep as raw percentage (e.g. 53.0) for trips/cost!
+            "battery_kwh": float(battery_kwh),    # Keep kWh separate if needed for UI display
+            "fuel_pct": float(fuel or 0.0),
             "volt12": float(volt12 or 0.0),
             "min_tyre": min_tyre,
             "msg": "Telemetry active",
@@ -173,7 +174,8 @@ def fetch_car_telemetry():
         "status": "empty_db",
         "odo": 0.0,
         "battery": 0.0,
-        "fuel": 0.0,
+        "battery_kwh": 0.0,
+        "fuel_pct": 0.0,
         "volt12": 0.0,
         "min_tyre": "--",
         "msg": "No database found",
@@ -184,7 +186,8 @@ def fetch_car_telemetry():
         "status": "error",
         "odo": 0.0,
         "battery": 0.0,
-        "fuel": 0.0,
+        "battery_kwh": 0.0,
+        "fuel_pct": 0.0,
         "volt12": 0.0,
         "min_tyre": "Error",
         "msg": str(e),
@@ -404,33 +407,48 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
-    <!-- Live LED Diagnosis Script -->
+    <!-- Live Telemetry & LED Diagnosis Script -->
     <script>
         function checkTelemetryStatus() {
             fetch('/api/telemetry_status')
                 .then(response => response.json())
                 .then(data => {
                     const led = document.getElementById('led-status');
-                    led.className = 'led-indicator';
-                    if (data.status === 'ok') {
-                        led.classList.add('led-ok');
-                        led.title = "Telemetry Active (Live)";
-                    } else if (data.status === 'empty_db') {
-                        led.classList.add('led-empty');
-                        led.title = "No Telemetry Records";
-                    } else {
-                        led.classList.add('led-error');
-                        led.title = "Telemetry Error: " + (data.msg || 'Fetch failed');
+                    if (led) {
+                        led.className = 'led-indicator';
+                        if (data.status === 'ok') {
+                            led.classList.add('led-ok');
+                            led.title = "Telemetry Active (Live)";
+                        } else if (data.status === 'empty_db') {
+                            led.classList.add('led-empty');
+                            led.title = "No Telemetry Records";
+                        } else {
+                            led.classList.add('led-error');
+                            led.title = "Telemetry Error: " + (data.msg || 'Fetch failed');
+                        }
+                    }
+
+                    // Update the mileage element live on the screen
+                    if (data.odo !== undefined) {
+                        const mileageEl = document.getElementById('mileage-value');
+                        if (mileageEl) {
+                            mileageEl.innerText = data.odo;
+                        }
                     }
                 })
                 .catch(err => {
                     const led = document.getElementById('led-status');
-                    led.className = 'led-indicator led-error';
-                    led.title = "Server Connection Failed";
+                    if (led) {
+                        led.className = 'led-indicator led-error';
+                        led.title = "Server Connection Failed";
+                    }
+                    console.error("Failed to fetch live telemetry:", err);
                 });
         }
-        setInterval(checkTelemetryStatus, 5000);
+
+        // Run immediately on page load, then poll every 3 to 10 seconds
         checkTelemetryStatus();
+        setInterval(checkTelemetryStatus, 10000); // Poll every 3 seconds for smooth live feedback
     </script>
 </body>
 </html>
@@ -518,9 +536,9 @@ def start_trip(trip_type):
       [
           trip_type,
           datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-          data["odo"],
-          data["battery"],
-          data["fuel"],
+          data.get("odometer", 0.0),  # Matches decoder key: "odometer"
+          data.get("battery", 0),       # Matches decoder key: "battery"
+          data.get("fuel_pct", 0),      # Matches decoder key: "fuel_pct"
       ],
   )
   db.commit()
@@ -538,7 +556,8 @@ def end_trip(trip_type):
 
   if active_trip:
     end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    end_odo = data["odo"] if data["odo"] > 0 else active_trip["start_odo"]
+    current_odo = data.get("odometer", 0.0)
+    end_odo = current_odo if current_odo > 0 else active_trip["start_odo"]
     distance = end_odo - active_trip["start_odo"]
 
     db.execute(
@@ -550,8 +569,8 @@ def end_trip(trip_type):
         [
             end_time,
             end_odo,
-            data["battery"],
-            data["fuel"],
+            data.get("battery", 0),       # Matches decoder key: "battery"
+            data.get("fuel_pct", 0),      # Matches decoder key: "fuel_pct"
             distance,
             active_trip["id"],
         ],
