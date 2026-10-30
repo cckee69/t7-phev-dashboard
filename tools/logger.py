@@ -157,45 +157,54 @@ CHG_LOOKBACK = 900 # window (s) to spot an ongoing charge from a SoC rise. SoC i
                    # latest reading to the *prior* one reads "flat" and drops us out of real-time
                    # mid-charge. Compare to the window's low instead, which still sees the gain.
 
+
 def adaptive_loop(conn):
-    print(f"adaptive logging to {os.path.abspath(DB)}  (active={ACTIVE}s / parked={PARK}s / dark={OFFLINE_SLOW}s)")
+    print(f"adaptive logging to {os.path.abspath(DB)} (custom rules: speed>0 -> ACTIVE, speed==0+awake -> PARKED, off -> OFFLINE)")
     active_until = 0.0
-    last_odo = None
-    soc_hist = []      # (ts, soc) within CHG_LOOKBACK, to spot a slow charge the prior frame can't
     miss = 0
+    
     while True:
         try:
             st = poll_once(conn)
             conn.commit()
         except Exception as e:
-            print("poll error:", repr(e)); st = None
+            print("poll error:", repr(e))
+            st = None
+            
         now = time.time()
+        
         if st:
             miss = 0
-            soc = st.get("battery"); odo = st.get("odo_guess")
-            # on the road = odometer advancing, or the car unlocked (b3 -- the "in use" hint; the
-            # lock/unlock byte verified in #5, previously mistaken for ignition). Charging is
-            # handled separately below (b3 is 0 on some cars while charging).
-            driving = bool(st.get("unlocked")) or (last_odo is not None and odo is not None and odo > last_odo)
-            if soc is not None:
-                soc_hist.append((now, soc))
-            if driving:
-                active_until = now + HOLD
-            if odo is not None: last_odo = odo
+            speed = st.get("speed", 0.0) or 0.0
+            unlocked = st.get("unlocked", False)
+            battery = st.get("battery")
+            
+            # 1. MOVING: Speed > 0 means the car is actively driving
+            is_moving = speed > 0.0
+            
+            # 2. ENGINE/SYSTEM ON (Idle / Traffic Light / Parked with power):
+            # Speed is 0, but byte 3 (unlocked/in-use hint) is active, or battery is charging
+            # (You can also factor in a hold timer so brief traffic stops stay responsive)
+            is_powered_on = unlocked or (battery is not None) 
+            
+            if is_moving:
+                # Rule 1: Moving -> ACTIVE (fast polling)
+                delay = ACTIVE
+                active_until = now + HOLD  # Keep active grace period alive
+            elif is_powered_on or (now < active_until):
+                # Rule 2: Speed == 0, but engine/system is still on (traffic light / parked awake) -> PARKED
+                delay = PARK
+            else:
+                # Rule 3: Engine off entirely / no activity -> Treat as parked/slow
+                delay = PARK
         else:
             miss += 1
-        # charge detector: SoC now above the window's low => still gaining => plugged in. Survives
-        # the 1%-coarse SoC that looks flat frame-to-frame, so a slow charge stays real-time. When
-        # the charge ends (or the car unplugs) the low catches up within CHG_LOOKBACK and releases.
-        soc_hist = [(t, s) for (t, s) in soc_hist if now - t <= CHG_LOOKBACK]
-        charging = bool(soc_hist) and soc_hist[-1][1] > min(s for _t, s in soc_hist)
-        awake = charging or time.time() < active_until
-        if awake:                                      # on the road or plugged in -> near real-time.
-            delay = ACTIVE                             # a momentary empty frame here is a transient WS
-        elif miss >= OFFLINE_AFTER:                    # hiccup (car still awake), so we stay fast.
-            delay = OFFLINE_SLOW                       # genuinely dark for a while -> back off
-        else:
-            delay = PARK                               # parked + idle + online
+            if miss >= OFFLINE_AFTER:
+                # Rule 4: Genuinely dark / offline after consecutive missing frames -> OFFLINE
+                delay = OFFLINE_SLOW
+            else:
+                delay = PARK
+                
         time.sleep(delay)
 
 # ---- persistent stream (recommended): hold ONE socket, like the CarLinko app does ----
