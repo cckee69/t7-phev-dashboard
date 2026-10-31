@@ -403,36 +403,30 @@ HTML_TEMPLATE = """
             </details>
 
             <h3 style="margin-top: 0; font-size: 1.05rem; color: #fff;">Trip History</h3>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Type</th>
-                        <th>Date</th>
-                        <th>Dist</th>
-                        <th>Bat</th>
-                        <th>Fuel</th>
-                        <th>Cost/km</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for item in completed_trips %}
-                    <tr>
-                        <td>
-                            <span class="badge {{ 'badge-a' if item.trip.trip_type == 'A' else 'badge-b' }}">
-                                {{ item.trip.trip_type }}
-                            </span>
-                        </td>
-                        <td>{{ item.trip.end_time[:10] }}</td>
-                        <td>{{ "%.1f"|format(item.trip.distance or 0) }} km</td>
-                        <td>{{ "%.0f"|format(item.trip.start_battery - item.trip.end_battery) }}%</td>
-                        <td>{{ "%.1f"|format(item.trip.start_fuel - item.trip.end_fuel) }}%</td>
-                        <td class="cost-highlight">RM {{ "%.2f"|format(item.cost_per_km) }}</td>
-                    </tr>
-                    {% else %}
-                    <tr><td colspan="6" style="text-align: center; color: #666;">No trips logged yet</td></tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+              <table class="history-table">
+                  <thead>
+                      <tr>
+                          <th>Type</th>
+                          <th>Date</th>
+                          <th>Dist</th>
+                          <th>Bat Used</th>
+                          <th>Fuel Used</th>
+                          <th>Cost/km</th>
+                      </tr>
+                  </thead>
+                  <tbody>
+                      {% for item in completed_trips %}
+                      <tr>
+                          <td>Trip {{ item.trip.trip_type }}</td>
+                          <td>{{ item.trip.end_time }}</td>
+                          <td>{{ "%.1f"|format(item.trip.distance) }} km</td>
+                          <td>{{ "%.2f"|format(item.batt_used) }} kWh</td>
+                          <td>{{ "%.2f"|format(item.fuel_used) }} L</td>
+                          <td>RM {{ "%.3f"|format(item.cost_per_km) }}</td>
+                      </tr>
+                      {% endfor %}
+                  </tbody>
+              </table>
         </div>
     </div>
 
@@ -527,9 +521,18 @@ def index():
         trip["end_fuel"],
         rates,
     )
-    completed_trips.append(
-        {"trip": trip, "total_cost": total_cost, "cost_per_km": cost_per_km}
-    )
+
+    # Calculate consumed amounts for display
+    batt_used_kwh = max(0.0, trip["start_battery"] - trip["end_battery"])
+    fuel_used_l = max(0.0, trip["start_fuel"] - trip["end_fuel"])
+    
+    completed_trips.append({
+        "trip": trip, 
+        "total_cost": total_cost, 
+        "cost_per_km": cost_per_km,
+        "batt_used": batt_used_kwh,
+        "fuel_used": fuel_used_l
+    })
 
   active_a_dict = dict(active_a) if active_a else None
   if active_a_dict:
@@ -615,10 +618,20 @@ def end_trip(trip_type):
 
   if active_trip:
     end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    current_odo = data.get("odometer", 0.0)
+    current_odo = data.get("odo", 0.0)
     end_odo = current_odo if current_odo > 0 else active_trip["start_odo"]
     distance = end_odo - active_trip["start_odo"]
+    
+    # Current raw values
+    end_battery_pct = data.get("battery", 0)
+    end_fuel_pct = data.get("fuel_pct", 0)
 
+    # Convert percentages to actual units for storage/display
+    # (Using data.get("battery_kwh") directly if your decoder provides it, or calculating it)
+    end_battery_kwh = data.get("battery_kwh", 0.0)
+    
+    # 60 liters total capacity conversion for fuel
+    end_fuel_liters = (end_fuel_pct / 100.0) * 60.0
     db.execute(
         """
             UPDATE trips 
@@ -628,8 +641,8 @@ def end_trip(trip_type):
         [
             end_time,
             end_odo,
-            data.get("battery", 0),       # Matches decoder key: "battery"
-            data.get("fuel_pct", 0),      # Matches decoder key: "fuel_pct"
+            end_battery_kwh,    # <--- Now storing kWh instead of %
+            end_fuel_liters,    # <--- Now storing Liters instead of %
             distance,
             active_trip["id"],
         ],
