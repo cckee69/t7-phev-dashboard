@@ -32,7 +32,7 @@ DEFAULT_RATES = {
 
 def convert_to_units(data):
     # Use 'odometer' as confirmed by your decoder log
-    odo = data.get("odometer", 0.0)
+    odo = data.get("odo", 0.0)
     
     # Convert battery percentage to kWh
     batt_pct = data.get("battery", 0.0)
