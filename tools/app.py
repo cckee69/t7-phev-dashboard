@@ -636,10 +636,13 @@ def end_trip(trip_type):
 
   if active_trip:
     end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    #current_odo = data.get("odo", 0.0)
-    current_odo, end_batt_kwh, end_fuel_liters = convert_to_units(data)
+    current_odo = data.get("odometer", 0.0)
     end_odo = current_odo if current_odo > 0 else active_trip["start_odo"]
     distance = end_odo - active_trip["start_odo"]
+
+    # Convert percentages to kWh (18.3 kWh total) and Liters (60L tank) inline
+    end_battery_kwh = (data.get("battery", 0.0) / 100.0) * 18.3
+    end_fuel_liters = (data.get("fuel_pct", 0.0) / 100.0) * 60.0
     
     db.execute(
         """
