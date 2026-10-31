@@ -348,14 +348,22 @@ HTML_TEMPLATE = """
                     <form action="{{ url_for('end_trip', trip_type='A') }}" method="POST">
                         <button type="submit" class="btn btn-end">End Trip A</button>
                     </form>
+                    
                     <script>
                         const startA = new Date("{{ active_a.start_time }}").getTime();
                         function updateTripA() {
                             const now = new Date().getTime();
                             const diffMins = Math.floor((now - startA) / 60000);
-                            const h = Math.floor(diffMins / 60);
+                            const days = Math.floor(diffMins / 1440);
+                            const hours = Math.floor((diffMins % 1440) / 60);
                             const m = diffMins % 60;
-                            document.getElementById('timer-a').innerText = `${h} hr ${m} min`;
+                
+                            if (days > 0) {
+                                document.getElementById('timer-a').innerText = `${days} D - ${hours} Hr`;
+                            } else {
+                                const h = Math.floor(diffMins / 60);
+                                document.getElementById('timer-a').innerText = `${h} hr ${m} min`;
+                            }
                         }
                         setInterval(updateTripA, 10000); updateTripA();
                     </script>
@@ -384,9 +392,16 @@ HTML_TEMPLATE = """
                         function updateTripB() {
                             const now = new Date().getTime();
                             const diffMins = Math.floor((now - startB) / 60000);
-                            const h = Math.floor(diffMins / 60);
+                            const days = Math.floor(diffMins / 1440);
+                            const hours = Math.floor((diffMins % 1440) / 60);
                             const m = diffMins % 60;
-                            document.getElementById('timer-b').innerText = `${h} hr ${m} min`;
+                
+                            if (days > 0) {
+                                document.getElementById('timer-b').innerText = `${days} D - ${hours} Hr`;
+                            } else {
+                                const h = Math.floor(diffMins / 60);
+                                document.getElementById('timer-b').innerText = `${h} hr ${m} min`;
+                            }
                         }
                         setInterval(updateTripB, 10000); updateTripB();
                     </script>
