@@ -338,7 +338,7 @@ HTML_TEMPLATE = """
         <div class="trips-grid">
             <!-- TRIP A CARD -->
             <div class="card">
-                <div class="card-title">Trip A (Short / Leg)</div>
+                <div class="card-title">Trip A </div>
                 {% if active_a %}
                     <div class="status-text">In Progress...</div>
                     <div class="stat-value" id="timer-a">-- hr -- min</div>
@@ -377,7 +377,7 @@ HTML_TEMPLATE = """
 
             <!-- TRIP B CARD -->
             <div class="card">
-                <div class="card-title">Trip B (Long / Tank)</div>
+                <div class="card-title">Trip B </div>
                 {% if active_b %}
                     <div class="status-text">In Progress...</div>
                     <div class="stat-value" id="timer-b">-- hr -- min</div>
