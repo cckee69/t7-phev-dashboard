@@ -343,7 +343,7 @@ HTML_TEMPLATE = """
                     <div class="status-text">In Progress...</div>
                     <div class="stat-value" id="timer-a">-- hr -- min</div>
                     <div class="stat-label">Elapsed Time</div>
-                    <div class="stat-value" id="trip-a-mileage-value">{{ "%.1f"|format(active_a.live_dist) if active_a.live_dist > 0 else '0.0' }} km</div>
+                    <div class="stat-value" id="trip-a-mileage-value">{{ "%.0f"|format(active_a.live_dist) if active_a.live_dist > 0 else '0.0' }} km</div>
                     <div class="stat-label">Active Mileage</div>
                     <form action="{{ url_for('end_trip', trip_type='A') }}" method="POST">
                         <button type="submit" class="btn btn-end">End Trip A</button>
@@ -374,7 +374,7 @@ HTML_TEMPLATE = """
                     <div class="status-text">In Progress...</div>
                     <div class="stat-value" id="timer-b">-- hr -- min</div>
                     <div class="stat-label">Elapsed Time</div>
-                    <div class="stat-value" id="trip-b-mileage-value">{{ "%.1f"|format(active_b.live_dist) if active_b.live_dist > 0 else '0.0' }} km</div>
+                    <div class="stat-value" id="trip-b-mileage-value">{{ "%.0f"|format(active_b.live_dist) if active_b.live_dist > 0 else '0.0' }} km</div>
                     <div class="stat-label">Active Mileage</div>
                     <form action="{{ url_for('end_trip', trip_type='B') }}" method="POST">
                         <button type="submit" class="btn btn-end">End Trip B</button>
@@ -422,23 +422,23 @@ HTML_TEMPLATE = """
               <table class="history-table">
                   <thead>
                       <tr>
-                          <th>Type</th>
-                          <th>Date</th>
-                          <th>Dist</th>
-                          <th>Bat Used</th>
-                          <th>Fuel Used</th>
+                          <th>Trip</th>
+                          <th>Date & Time</th>
+                          <th>Dist km</th>
+                          <th>Bat kWh</th>
+                          <th>Fuel L</th>
                           <th>Cost/km</th>
                       </tr>
                   </thead>
                   <tbody>
                       {% for item in completed_trips %}
                       <tr>
-                          <td>Trip {{ item.trip.trip_type }}</td>
+                          <td> {{ item.trip.trip_type }}</td>
                           <td>{{ item.trip.end_time }}</td>
-                          <td>{{ "%.1f"|format(item.trip.distance) }} km</td>
-                          <td>{{ "%.2f"|format(item.batt_used) }} kWh</td>
-                          <td>{{ "%.2f"|format(item.fuel_used) }} L</td>
-                          <td>RM {{ "%.3f"|format(item.cost_per_km) }}</td>
+                          <td>{{ "%.0f"|format(item.trip.distance) }} </td>
+                          <td>{{ "%.2f"|format(item.batt_used) }} </td>
+                          <td>{{ "%.2f"|format(item.fuel_used) }} </td>
+                          <td>RM {{ "%.2f"|format(item.cost_per_km) }}</td>
                       </tr>
                       {% endfor %}
                   </tbody>
@@ -644,9 +644,12 @@ def end_trip(trip_type):
   ).fetchone()
 
   if active_trip:
-    end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    current_odo = data.get("odometer", 0.0)
+    end_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+    current_odo = data.get("odo", 0.0) or data.get("odometer", 0.0)
     end_odo = current_odo if current_odo > 0 else active_trip["start_odo"]
+    if end_odo < active_trip["start_odo"]:
+            end_odo = active_trip["start_odo"]
+      
     distance = end_odo - active_trip["start_odo"]
 
     # Convert percentages to kWh (18.3 kWh total) and Liters (60L tank) inline
