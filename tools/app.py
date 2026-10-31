@@ -466,7 +466,16 @@ HTML_TEMPLATE = """
                             led.title = "Car Status: OFFLINE / Dark";
                         }
                     }
-
+                    // --- NEW: Live update Voltage and Tyre Status ---
+                    const voltEl = document.getElementById('val-volt12');
+                    if (voltEl && data.volt12 !== undefined) {
+                        voltEl.innerText = data.volt12.toFixed(1) + 'V';
+                    }
+    
+                    const tyreEl = document.getElementById('val-tyre');
+                    if (tyreEl && data.min_tyre !== undefined) {
+                        tyreEl.innerText = data.min_tyre;
+                    }
                     // Update Trip A and Trip B live active mileage on the screen
                     if (data.dist_a !== undefined) {
                         const distAEl = document.getElementById('trip-a-mileage-value'); // Make sure this matches your Trip A element ID
