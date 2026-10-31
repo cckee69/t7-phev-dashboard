@@ -6,6 +6,9 @@ import sys
 from flask import Flask, g, redirect, render_template_string, request, url_for,jsonify
 import time 
 
+TOTAL_BATTERY_KWH = 18.3
+TOTAL_FUEL_LITERS = 60.0
+
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 try:
   import server
@@ -27,6 +30,19 @@ DEFAULT_RATES = {
     "battery_capacity_kwh": 18.3,
 }
 
+def convert_to_units(data):
+    # Use 'odometer' as confirmed by your decoder log
+    odo = data.get("odometer", 0.0)
+    
+    # Convert battery percentage to kWh
+    batt_pct = data.get("battery", 0.0)
+    batt_kwh = (batt_pct / 100.0) * TOTAL_BATTERY_KWH
+    
+    # Convert fuel percentage to liters (60L full tank)
+    fuel_pct = data.get("fuel_pct", 0.0)
+    fuel_liters = (fuel_pct / 100.0) * TOTAL_FUEL_LITERS
+    
+    return odo, batt_kwh, fuel_liters
 
 def load_rates():
   if os.path.exists(RATES_FILE):
@@ -589,6 +605,8 @@ def telemetry_status_endpoint():
 @app.route("/start_trip/<trip_type>", methods=["POST"])
 def start_trip(trip_type):
   data = fetch_car_telemetry()
+  odo, batt_kwh, fuel_liters = convert_to_units(data)
+  
   db = get_db()
   db.execute(
       """
@@ -598,9 +616,9 @@ def start_trip(trip_type):
       [
           trip_type,
           datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-          data.get("odo", 0.0),  # Matches decoder key: "odometer"
-          data.get("battery", 0),       # Matches decoder key: "battery"
-          data.get("fuel_pct", 0),      # Matches decoder key: "fuel_pct"
+          odo,
+          batt_kwh,       # Stored in kWh
+          fuel_liters,    # Stored in Liters
       ],
   )
   db.commit()
@@ -618,20 +636,11 @@ def end_trip(trip_type):
 
   if active_trip:
     end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    current_odo = data.get("odo", 0.0)
+    #current_odo = data.get("odo", 0.0)
+    current_odo, end_batt_kwh, end_fuel_liters = convert_to_units(data)
     end_odo = current_odo if current_odo > 0 else active_trip["start_odo"]
     distance = end_odo - active_trip["start_odo"]
     
-    # Current raw values
-    end_battery_pct = data.get("battery", 0)
-    end_fuel_pct = data.get("fuel_pct", 0)
-
-    # Convert percentages to actual units for storage/display
-    # (Using data.get("battery_kwh") directly if your decoder provides it, or calculating it)
-    end_battery_kwh = data.get("battery_kwh", 0.0)
-    
-    # 60 liters total capacity conversion for fuel
-    end_fuel_liters = (end_fuel_pct / 100.0) * 60.0
     db.execute(
         """
             UPDATE trips 
