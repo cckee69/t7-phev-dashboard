@@ -616,7 +616,7 @@ def start_trip(trip_type):
       [
           trip_type,
           datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-          data.get("odometer", 0.0),
+          odo,
           batt_kwh,       # Stored in kWh
           fuel_liters,    # Stored in Liters
       ],
