@@ -1,0 +1,6 @@
+{
+  "fuel_price_per_l": 1.99,
+  "elec_price_per_kwh": 0.33,
+  "fuel_tank_capacity_l": 60.0,
+  "battery_capacity_kwh": 18.3
+}
