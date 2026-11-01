@@ -238,14 +238,12 @@ def fetch_car_telemetry():
         }
 
 
-def calculate_trip_cost(
-    distance, start_bat, end_bat, start_fuel, end_fuel, rates
-):
+def calculate_trip_cost(distance, start_bat, end_bat, start_fuel, end_fuel, rates):
   if not distance or distance <= 0:
     return 0.0, 0.0
 
-  bat_drop = max(0.0, (start_bat or 0.0) - (end_bat or 0.0))
-  kwh_used = (bat_drop / 100.0) * rates["battery_capacity_kwh"]
+  # Since start_bat and end_bat are already in kWh:
+  kwh_used = max(0.0, (start_bat or 0.0) - (end_bat or 0.0))
   elec_cost = kwh_used * rates["elec_price_per_kwh"]
 
   fuel_drop = max(0.0, (start_fuel or 0.0) - (end_fuel or 0.0))
