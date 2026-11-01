@@ -453,7 +453,7 @@ HTML_TEMPLATE = """
                           <td>{{ "%.2f"|format(item.batt_used) }} </td>
                           <td>{{ "%.2f"|format(item.fuel_used) }} </td>
                           <td>RM {{ "%.2f"|format(item.total_cost) }}</td>
-                          <td>RM {{ "%.2f"|format(trip.cost_per_100km) }}</td>
+                          <td>RM {{ "%.2f"|format(item.cost_per_100km) }}</td>
                       </tr>
                       {% endfor %}
                   </tbody>
@@ -710,4 +710,4 @@ def update_rates():
 
 if __name__ == "__main__":
   init_db()
-  app.run(debug=True,host="0.0.0.0", port=5000)
+  app.run(host="0.0.0.0", port=8088)
