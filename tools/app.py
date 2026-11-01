@@ -570,7 +570,7 @@ def index():
     completed_trips.append({
         "trip": trip, 
         "total_cost": total_cost, 
-        "cost_per_km": cost_per_km,
+        "cost_per_100km": cost_per_100km,
         "batt_used": batt_used_kwh,
         "fuel_used": fuel_used_l
     })
