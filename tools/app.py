@@ -440,7 +440,8 @@ HTML_TEMPLATE = """
                           <th>Dist km</th>
                           <th>Bat kWh</th>
                           <th>Fuel L</th>
-                          <th>Cost/km</th>
+                          <th>Total Cost</th>
+                          <th>Cost/100km</th>
                       </tr>
                   </thead>
                   <tbody>
@@ -451,7 +452,8 @@ HTML_TEMPLATE = """
                           <td>{{ "%.0f"|format(item.trip.distance) }} </td>
                           <td>{{ "%.2f"|format(item.batt_used) }} </td>
                           <td>{{ "%.2f"|format(item.fuel_used) }} </td>
-                          <td>RM {{ "%.2f"|format(item.cost_per_km) }}</td>
+                          <td>RM {{ "%.2f"|format(item.total_cost) }}</td>
+                          <td>RM {{ "%.2f"|format(trip.cost_per_100km) }}</td>
                       </tr>
                       {% endfor %}
                   </tbody>
@@ -559,7 +561,8 @@ def index():
         trip["end_fuel"],
         rates,
     )
-
+    cost_per_100km = cost_per_km * 100.0
+    
     # Calculate consumed amounts for display
     batt_used_kwh = max(0.0, trip["start_battery"] - trip["end_battery"])
     fuel_used_l = max(0.0, trip["start_fuel"] - trip["end_fuel"])
