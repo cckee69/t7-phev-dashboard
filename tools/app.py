@@ -30,6 +30,79 @@ DEFAULT_RATES = {
     "battery_capacity_kwh": 18.3,
 }
 
+def get_financial_totals():
+    db_path = DB if DB else "carlinko.db"
+    if not os.path.exists(db_path):
+        return {"fuel_cost": 0.0, "fuel_liters": 0.0, "elec_cost": 0.0, "elec_kwh": 0.0, "total_cost": 0.0}
+    
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT COALESCE(SUM(total_cost_rm), 0.0), COALESCE(SUM(liters_added), 0.0) FROM fuel_logs;")
+        total_fuel_cost, total_liters = cursor.fetchone()
+        
+        cursor.execute("SELECT COALESCE(SUM(cost_rm), 0.0), COALESCE(SUM(kwh_added), 0.0) FROM charging_logs;")
+        total_elec_cost, total_kwh = cursor.fetchone()
+        
+        conn.close()
+    except sqlite3.OperationalError:
+        # Tables don't exist yet in carlinko.db; default safely to zeros
+        total_fuel_cost, total_liters, total_elec_cost, total_kwh = 0.0, 0.0, 0.0, 0.0
+
+    grand_total_cost = total_fuel_cost + total_elec_cost
+    return {
+        "fuel_cost": total_fuel_cost,
+        "fuel_liters": total_liters,
+        "elec_cost": total_elec_cost,
+        "elec_kwh": total_kwh,
+        "total_cost": grand_total_cost
+    }
+
+def calculate_trip_fuel_consumption(trip_start_ts, trip_end_ts, start_fuel, end_fuel):
+    conn = sqlite3.connect(DB)
+    cursor = conn.cursor()
+    
+    # Check if any petrol was pumped during this specific trip's time window
+    cursor.execute(
+        "SELECT COALESCE(SUM(liters_added), 0.0) FROM fuel_logs WHERE ts BETWEEN ? AND ?;",
+        (trip_start_ts, trip_end_ts)
+    )
+    pumped_liters = cursor.fetchone()[0]
+    conn.close()
+    
+    # Apply your verified formula: (Start + Pumped) - End
+    adjusted_start_fuel = start_fuel + pumped_liters
+    net_consumed_liters = adjusted_start_fuel - end_fuel
+    
+    return {
+        "pumped_liters": pumped_liters,
+        "adjusted_start_fuel": adjusted_start_fuel,
+        "consumed_liters": max(0.0, net_consumed_liters)
+    }
+
+def calculate_trip_battery_consumption(trip_start_ts, trip_end_ts, start_battery_kwh, end_battery_kwh):
+    conn = sqlite3.connect(DB)
+    cursor = conn.cursor()
+    
+    # Check if any electricity was charged during this specific trip's time window
+    cursor.execute(
+        "SELECT COALESCE(SUM(kwh_added), 0.0) FROM charging_logs WHERE ts BETWEEN ? AND ?;",
+        (trip_start_ts, trip_end_ts)
+    )
+    charged_kwh = cursor.fetchone()[0]
+    conn.close()
+    
+    # Apply the same algebraic formula: (Start + Charged) - End
+    adjusted_start_battery = start_battery_kwh + charged_kwh
+    net_consumed_kwh = adjusted_start_battery - end_battery_kwh
+    
+    return {
+        "charged_kwh": charged_kwh,
+        "adjusted_start_battery": adjusted_start_battery,
+        "consumed_kwh": max(0.0, net_consumed_kwh)
+    }
+
 def convert_to_units(data):
     # Use 'odometer' as confirmed by your decoder log
     odo = data.get("odo", 0.0)
@@ -631,6 +704,9 @@ def telemetry_status_endpoint():
 def start_trip(trip_type):
   data = fetch_car_telemetry()
   odo, batt_kwh, fuel_liters = convert_to_units(data)
+
+  now_ts = int(time.time())
+  start_time_str = datetime.fromtimestamp(now_ts).strftime("%Y-%m-%d %H:%M:%S")
   
   db = get_db()
   db.execute(
@@ -640,7 +716,7 @@ def start_trip(trip_type):
     """,
       [
           trip_type,
-          datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+          start_time_str,
           odo,
           batt_kwh,       # Stored in kWh
           fuel_liters,    # Stored in Liters
@@ -652,44 +728,62 @@ def start_trip(trip_type):
 
 @app.route("/end_trip/<trip_type>", methods=["POST"])
 def end_trip(trip_type):
-  data = fetch_car_telemetry()
-  db = get_db()
-  active_trip = db.execute(
-      "SELECT * FROM trips WHERE trip_type = ? AND status = 'ACTIVE' LIMIT 1",
-      [trip_type],
-  ).fetchone()
+    data = fetch_car_telemetry()
+    db = get_db()
+    active_trip = db.execute(
+        "SELECT * FROM trips WHERE trip_type = ? AND status = 'ACTIVE' LIMIT 1",
+        [trip_type],
+    ).fetchone()
 
-  if active_trip:
-    end_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-    current_odo = data.get("odo", 0.0) or data.get("odometer", 0.0)
-    end_odo = current_odo if current_odo > 0 else active_trip["start_odo"]
-    if end_odo < active_trip["start_odo"]:
+    if active_trip:
+        end_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+        current_odo = data.get("odo", 0.0) or data.get("odometer", 0.0)
+        end_odo = current_odo if current_odo > 0 else active_trip["start_odo"]
+        if end_odo < active_trip["start_odo"]:
             end_odo = active_trip["start_odo"]
-      
-    distance = end_odo - active_trip["start_odo"]
+            
+        distance = end_odo - active_trip["start_odo"]
 
-    # Convert percentages to kWh (18.3 kWh total) and Liters (60L tank) inline
-    end_battery_kwh = (data.get("battery", 0.0) / 100.0) * 18.3
-    end_fuel_liters = (data.get("fuel_pct", 0.0) / 100.0) * 60.0
-    
-    db.execute(
-        """
-            UPDATE trips 
-            SET end_time = ?, end_odo = ?, end_battery = ?, end_fuel = ?, distance = ?, status = 'COMPLETED'
-            WHERE id = ?
-        """,
-        [
-            end_time,
-            end_odo,
-            end_battery_kwh,    # <--- Now storing kWh instead of %
-            end_fuel_liters,    # <--- Now storing Liters instead of %
-            distance,
-            active_trip["id"],
-        ],
-    )
-    db.commit()
+        # Convert percentages to kWh (18.3 kWh total) and Liters (60L tank) inline
+        end_battery_kwh = (data.get("battery", 0.0) / 100.0) * 18.3
+        raw_end_fuel_liters = (data.get("fuel_pct", 0.0) / 100.0) * 60.0
+        
+        # --- APPLY MID-TRIP REFUEL ADJUSTMENT HERE ---
+        # Assuming your trips table stores start time as a unix timestamp or ISO string. 
+        # Pass the trip's start timestamp (or datetime) and current end timestamp.
+        # Convert stored start_time string back into a Unix timestamp for the log lookup
+        start_dt = datetime.strptime(active_trip["start_time"], "%Y-%m-%d %H:%M:%S")
+        trip_start_ts = int(start_dt.timestamp())
+        trip_end_ts = int(time.time())
+        
+        # 1. Calculate Fuel with mid-trip refuels accounted for
+        fuel_calc = calculate_trip_fuel_consumption(
+            trip_start_ts, trip_end_ts, active_trip["start_fuel"], raw_end_fuel_liters
+        )
+        
+        # 2. Calculate Battery with mid-trip charges accounted for
+        battery_calc = calculate_trip_battery_consumption(
+            trip_start_ts, trip_end_ts, active_trip["start_battery"], end_battery_kwh
+        )
+        
+        db.execute(
+            """
+                UPDATE trips 
+                SET end_time = ?, end_odo = ?, end_battery = ?, end_fuel = ?, distance = ?, status = 'COMPLETED'
+                WHERE id = ?
+            """,
+            [
+                end_time,
+                end_odo,
+                battery_calc["consumed_kwh"],  # Storing true net consumed kWh
+                fuel_calc["consumed_liters"],  # Storing true net consumed liters
+                distance,
+                active_trip["id"],
+            ],
+        )
+        db.commit()
 
-  return redirect(url_for("index"))
+    return redirect(url_for("index"))
 
 
 @app.route("/update_rates", methods=["POST"])
