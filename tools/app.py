@@ -405,7 +405,10 @@ HTML_TEMPLATE = """
             <span>|</span>
             <span>🛞 Tyre Min: <strong id="val-tyre">{{ telemetry.min_tyre }}</strong></span>
         </div>
-        
+        <!-- NEW: Dynamic Top-Up Alert Banner -->
+        <div id="topup-banner" style="display: none; background: #2e7d32; color: white; padding: 8px; border-radius: 8px; margin-bottom: 16px; text-align: center; font-size: 0.85rem; font-weight: bold;">
+            <span id="topup-text"></span>
+        </div>
         <div class="trips-grid">
             <!-- TRIP A CARD -->
             <div class="card">
@@ -571,7 +574,16 @@ HTML_TEMPLATE = """
                             distAEl.innerText = data.dist_a.toFixed(1) + ' km';
                         }
                     }
-
+                    
+                    const topupBanner = document.getElementById('topup-banner');
+                    const topupText = document.getElementById('topup-text');
+                    if (data.recent_topup && data.recent_topup !== "") {
+                        topupText.innerText = data.recent_topup;
+                        topupBanner.style.display = 'block';
+                    } else {
+                        topupBanner.style.display = 'none';
+                    }
+                    
                     if (data.dist_b !== undefined) {
                         const distBEl = document.getElementById('trip-b-mileage-value'); // Make sure this matches your Trip B element ID
                         if (distBEl) {
@@ -697,6 +709,30 @@ def telemetry_status_endpoint():
   data["dist_a"] = live_dist_a
   data["dist_b"] = live_dist_b
 
+  # Check for recent top-ups in carlinko.db (e.g., last 10 minutes / 600 seconds)
+  recent_topup_msg = ""
+  db_path = DB if DB else "carlinko.db"
+  if os.path.exists(db_path):
+      try:
+          conn = sqlite3.connect(db_path)
+          cursor = conn.cursor()
+          ten_mins_ago = int(time.time()) - 600
+          
+          cursor.execute("SELECT kwh_added FROM charging_logs WHERE ts >= ? ORDER BY ts DESC LIMIT 1", (ten_mins_ago,))
+          c_row = cursor.fetchone()
+          if c_row:
+              recent_topup_msg = f"⚡ Recent Charge Detected (+{c_row[0]:.2f} kWh)"
+              
+          cursor.execute("SELECT liters_added FROM fuel_logs WHERE ts >= ? ORDER BY ts DESC LIMIT 1", (ten_mins_ago,))
+          f_row = cursor.fetchone()
+          if f_row:
+              recent_topup_msg = f"⛽ Recent Refuel Detected (+{f_row[0]:.1f} L)"
+              
+          conn.close()
+      except Exception:
+          pass
+
+  data["recent_topup"] = recent_topup_msg
   return jsonify(data)
 
 
