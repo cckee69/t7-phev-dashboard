@@ -60,18 +60,23 @@ def get_financial_totals():
     }
 
 def calculate_trip_fuel_consumption(trip_start_ts, trip_end_ts, start_fuel, end_fuel):
-    conn = sqlite3.connect(DB)
-    cursor = conn.cursor()
+    db_path = DB if DB else "carlinko.db"
+    pumped_liters = 0.0
     
-    # Check if any petrol was pumped during this specific trip's time window
-    cursor.execute(
-        "SELECT COALESCE(SUM(liters_added), 0.0) FROM fuel_logs WHERE ts BETWEEN ? AND ?;",
-        (trip_start_ts, trip_end_ts)
-    )
-    pumped_liters = cursor.fetchone()[0]
-    conn.close()
+    if os.path.exists(db_path):
+        try:
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT COALESCE(SUM(liters_added), 0.0) FROM fuel_logs WHERE ts BETWEEN ? AND ?;",
+                (trip_start_ts, trip_end_ts)
+            )
+            pumped_liters = cursor.fetchone()[0]
+            conn.close()
+        except sqlite3.OperationalError:
+            # Table doesn't exist yet in carlinko.db; default to 0.0
+            pumped_liters = 0.0
     
-    # Apply your verified formula: (Start + Pumped) - End
     adjusted_start_fuel = start_fuel + pumped_liters
     net_consumed_liters = adjusted_start_fuel - end_fuel
     
@@ -81,19 +86,25 @@ def calculate_trip_fuel_consumption(trip_start_ts, trip_end_ts, start_fuel, end_
         "consumed_liters": max(0.0, net_consumed_liters)
     }
 
+
 def calculate_trip_battery_consumption(trip_start_ts, trip_end_ts, start_battery_kwh, end_battery_kwh):
-    conn = sqlite3.connect(DB)
-    cursor = conn.cursor()
+    db_path = DB if DB else "carlinko.db"
+    charged_kwh = 0.0
     
-    # Check if any electricity was charged during this specific trip's time window
-    cursor.execute(
-        "SELECT COALESCE(SUM(kwh_added), 0.0) FROM charging_logs WHERE ts BETWEEN ? AND ?;",
-        (trip_start_ts, trip_end_ts)
-    )
-    charged_kwh = cursor.fetchone()[0]
-    conn.close()
+    if os.path.exists(db_path):
+        try:
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT COALESCE(SUM(kwh_added), 0.0) FROM charging_logs WHERE ts BETWEEN ? AND ?;",
+                (trip_start_ts, trip_end_ts)
+            )
+            charged_kwh = cursor.fetchone()[0]
+            conn.close()
+        except sqlite3.OperationalError:
+            # Table doesn't exist yet in carlinko.db; default to 0.0
+            charged_kwh = 0.0
     
-    # Apply the same algebraic formula: (Start + Charged) - End
     adjusted_start_battery = start_battery_kwh + charged_kwh
     net_consumed_kwh = adjusted_start_battery - end_battery_kwh
     
