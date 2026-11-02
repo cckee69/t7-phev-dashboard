@@ -322,22 +322,18 @@ def fetch_car_telemetry():
         }
 
 
-def calculate_trip_cost(distance, start_bat, end_bat, start_fuel, end_fuel, rates):
-  if not distance or distance <= 0:
-    return 0.0, 0.0
+def calculate_trip_cost(distance, consumed_kwh, consumed_liters, rates):
+    if not distance or distance <= 0:
+        return 0.0, 0.0
 
-  # Since start_bat and end_bat are already in kWh:
-  kwh_used = max(0.0, (start_bat or 0.0) - (end_bat or 0.0))
-  elec_cost = kwh_used * rates["elec_price_per_kwh"]
+    # consumed_kwh and consumed_liters are already net-consumed amounts
+    elec_cost = max(0.0, consumed_kwh) * rates["elec_price_per_kwh"]
+    fuel_cost = max(0.0, consumed_liters) * rates["fuel_price_per_l"]
 
-  fuel_drop = max(0.0, (start_fuel or 0.0) - (end_fuel or 0.0))
-  liters_used = (fuel_drop / 100.0) * rates["fuel_tank_capacity_l"]
-  fuel_cost = liters_used * rates["fuel_price_per_l"]
+    total_cost = elec_cost + fuel_cost
+    cost_per_km = total_cost / distance if distance > 0 else 0.0
 
-  total_cost = elec_cost + fuel_cost
-  cost_per_km = total_cost / distance if distance > 0 else 0.0
-
-  return total_cost, cost_per_km
+    return total_cost, cost_per_km
 
 
 HTML_TEMPLATE = """
@@ -644,24 +640,22 @@ def index():
     live_dist_b = max(0.0, current_odo - active_b["start_odo"])
 
   raw_completed = db.execute(
-      "SELECT * FROM trips WHERE status = 'COMPLETED' ORDER BY id DESC LIMIT 10"
-  ).fetchall()
+        "SELECT * FROM trips WHERE status = 'COMPLETED' ORDER BY id DESC LIMIT 10"
+    ).fetchall()
 
   completed_trips = []
   for trip in raw_completed:
+    # end_battery and end_fuel store the true net consumed amounts
+    batt_used_kwh = max(0.0, trip["end_battery"] or 0.0)
+    fuel_used_l = max(0.0, trip["end_fuel"] or 0.0)
+    
     total_cost, cost_per_km = calculate_trip_cost(
         trip["distance"],
-        trip["start_battery"],
-        trip["end_battery"],
-        trip["start_fuel"],
-        trip["end_fuel"],
+        batt_used_kwh,
+        fuel_used_l,
         rates,
     )
     cost_per_100km = cost_per_km * 100.0
-    
-    # Calculate consumed amounts for display
-    batt_used_kwh = max(0.0, trip["start_battery"] - trip["end_battery"])
-    fuel_used_l = max(0.0, trip["start_fuel"] - trip["end_fuel"])
     
     completed_trips.append({
         "trip": trip, 
