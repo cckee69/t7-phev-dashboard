@@ -345,16 +345,16 @@ def main():
     elif args.loop <= 0:
         poll_once(conn); conn.commit()
     else:
-        print(f"logging every {args.loop}s to {os.path.abspath(DB)} (Ctrl-C to stop)")
-        while True:
-            try:
-                poll_once(conn); 
-                conn.commit()
-                for _ in range(args.loop): 
-                   time.sleep(1)
-            except Exception as e:
-                print("poll error:", repr(e))
-                time.sleep(5)
+            print(f"logging every {args.loop}s to {os.path.abspath(DB)} (Ctrl-C to stop)")
+            while True:
+                try:
+                    poll_once(conn)
+                    conn.commit()
+                    for _ in range(args.loop): 
+                        time.sleep(1)
+                except Exception as e:
+                    print("poll error:", repr(e))
+                    time.sleep(5)
 
 if __name__ == "__main__":
     main()
