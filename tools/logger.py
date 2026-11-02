@@ -45,6 +45,22 @@ CREATE TABLE IF NOT EXISTS telemetry (
   online    INTEGER,               -- 1 if a fresh blob arrived
   raw       TEXT                   -- full blob hex (for back-decoding)
 );
+
+-- Separate tracking tables for external charging and refueling events
+CREATE TABLE IF NOT EXISTS charging_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER,
+  kwh_added REAL,
+  cost_rm REAL,
+  source TEXT
+);
+
+CREATE TABLE IF NOT EXISTS fuel_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER,
+  liters_added REAL,
+  total_cost_rm REAL
+);
 """
 
 def decode(hexstr):
