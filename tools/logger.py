@@ -39,13 +39,16 @@ DB      = os.path.join(_DATA, "carlinko.db") if os.environ.get("CARLINKO_DATA") 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS telemetry (
   ts        INTEGER PRIMARY KEY,   -- unix seconds
-  dt        TEXT,                  -- local ISO time
+  dt        TEXT,                    -- local ISO time
   battery   INTEGER,
   range_km  INTEGER,
-  odo_guess INTEGER,               -- candidate odometer (bytes 12-13), validate by driving
-  tyre_raw  TEXT,                  -- 8 bytes hex (4 psi + 4 temp), FF=invalid
-  online    INTEGER,               -- 1 if a fresh blob arrived
-  raw       TEXT                   -- full blob hex (for back-decoding)
+  odo_guess INTEGER,                 -- candidate odometer (bytes 12-13), validate by driving
+  fuel_pct  INTEGER,                 -- added fuel percentage
+  volt12    REAL,                    -- 12V battery voltage
+  ac_temp_c INTEGER,                 -- AC temperature
+  tyre_raw  TEXT,                    -- 8 bytes hex (4 psi + 4 temp), FF=invalid
+  online    INTEGER,                 -- 1 if a fresh blob arrived
+  raw       TEXT                     -- full blob hex (for back-decoding)
 );
 
 -- Separate tracking tables for external charging and refueling events
