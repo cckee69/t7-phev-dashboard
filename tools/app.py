@@ -3,7 +3,7 @@ import json
 import os
 import sqlite3
 import sys
-from flask import Flask, g, redirect, render_template_string, request, url_for,jsonify
+from flask import Flask, g, redirect, render_template_string, request, url_for, jsonify
 import time 
 
 TOTAL_BATTERY_KWH = 18.3
@@ -12,10 +12,10 @@ TOTAL_FUEL_LITERS = 60.0
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 try:
   import server
-  from server import live_poll, DB, decode
+  from server import live_poll, DB
 except ImportError:
   server = None
-  live_poll = DB = decode = None
+  live_poll = DB = None
 
 app = Flask(__name__)
 DATABASE = "trips.db"
@@ -31,7 +31,6 @@ DEFAULT_RATES = {
 }
 
 def convert_to_units(data):
-    # Use 'odometer' as confirmed by your decoder log
     odo = data.get("odo", 0.0)
     
     # Convert battery percentage to kWh
@@ -102,11 +101,11 @@ def init_db():
       pass
     db.commit()
 
-def fetch_car_telemetry():
-    """Fetch latest car telemetry from carlinko.db safely and determine car state using speed and a holding grace period."""
-    HOLD = 120 # idle time when speed = 0
+def fetch_car_telemetry(active_a_start_odo=None, active_b_start_odo=None):
+    """Fetch latest car telemetry directly from the 9-column carlinko.db schema with zero raw hex decoding."""
+    HOLD = 120  # 2 minutes grace period for offline check
     try:
-        if hasattr(server, "live_poll"):
+        if server and hasattr(server, "live_poll"):
             live_poll()
 
         db_path = DB if DB else "carlinko.db"
@@ -114,140 +113,87 @@ def fetch_car_telemetry():
             conn = sqlite3.connect(db_path, timeout=5.0)
             cursor = conn.cursor()
             
-            # Fetch the latest telemetry record
-            cursor.execute("SELECT ts, online, raw FROM telemetry ORDER BY ts DESC LIMIT 1")
-            latest_row = cursor.fetchone()
-            
-            if not latest_row:
-                conn.close()
+            # Select directly from the 9 clean columns in carlinko.db
+            cursor.execute("""
+                SELECT ts, dt, battery, fuel_pct, odo_guess, tyre_raw, online, volt12, speed 
+                FROM telemetry 
+                ORDER BY ts DESC 
+                LIMIT 1
+            """)
+            row = cursor.fetchone()
+            conn.close()
+
+            if not row:
                 return {
                     "status": "empty_db", "car_status": "OFFLINE", "odo": 0.0,
                     "battery": 0.0, "battery_kwh": 0.0, "fuel_pct": 0.0,
-                    "volt12": 0.0, "min_tyre": "--", "msg": "No telemetry records"
+                    "volt12": 0.0, "min_tyre": "--", "msg": "No telemetry records",
+                    "dist_a": 0.0, "dist_b": 0.0
                 }
 
-            latest_ts, online_flag, raw_hex = latest_row[0], latest_row[1], latest_row[2]
-            age = time.time() - latest_ts
+            ts, dt, battery, fuel_pct, odo_guess, tyre_raw, online_flag, volt12, speed = row
+            age = time.time() - ts
 
-            # Check recent window (HOLD = 600s) for any movement (speed > 0)
-            hold_window = time.time() - HOLD
-            cursor.execute("SELECT raw FROM telemetry WHERE ts >= ?", (hold_window,))
-            recent_rows = cursor.fetchall()
-            conn.close()
-
-            current_speed = 0.0
-            has_recent_movement = False
-            
-            if raw_hex:
-                decoded_latest = decode(raw_hex)
-                current_speed = decoded_latest.get("speed", 0.0) or 0.0
-
-            for r in recent_rows:
-                if r[0]:
-                    dec = decode(r[0])
-                    if (dec.get("speed", 0.0) or 0.0) > 0.0:
-                        has_recent_movement = True
-                        break
-
-            # --- State Machine Rules ---
+            # --- Direct State Machine using online flag & age ---
             if age > HOLD or online_flag == 0:
                 car_status = "OFFLINE"
-            elif current_speed > 0.0 or has_recent_movement:
-                car_status = "ACTIVE"  # Covers moving now AND holding through traffic lights/stops
+            elif online_flag == 1 or (speed is not None and speed > 0.0):
+                car_status = "ACTIVE"
             else:
-                car_status = "PARKED"  # True parked/idle state after grace period expires
+                car_status = "PARKED"
 
-            # Decode metrics from latest raw hex
-            decoded = decode(raw_hex) if raw_hex else {}
+            current_odo = float(odo_guess or 0.0)
+            battery_pct_val = float(battery or 0.0)
+            battery_kwh = round((battery_pct_val / 100.0) * TOTAL_BATTERY_KWH, 2)
+            fuel_val = float(fuel_pct or 0.0)
+            volt12_val = float(volt12 or 0.0)
+            min_tyre = tyre_raw if tyre_raw else "--"
 
-            odo = (
-                decoded.get("odometer")
-                or decoded.get("odo_guess")
-                or decoded.get("odo", 0.0)
-            )
-
-            battery_pct = decoded.get("battery", 0.0) or 0.0
-            battery_kwh = round((battery_pct / 100.0) * 18.3, 2)
-
-            fuel_pct = decoded.get("fuel_pct")
-            if fuel_pct is None and raw_hex:
-                try:
-                    b = bytes.fromhex(raw_hex)
-                    if len(b) > 21:
-                        fuel_pct = b[21]
-                except Exception:
-                    fuel_pct = 0.0
-
-            volt12 = decoded.get("volt12", 0.0)
-
-            # Tyre health check
-            # --- ENHANCED: Tyre Delta & Health Warning Check ---
-            tyre_vals = []
-            for k, v in decoded.items():
-                if "tyre" in k.lower() or "tire" in k.lower() or k.endswith("_pressure"):
-                    if isinstance(v, (int, float)):
-                        tyre_vals.append(v)
-    
-            if tyre_vals and len(tyre_vals) >= 2:
-                min_tyre = min(tyre_vals)
-                # Create a list of the other tyres (excluding the minimum)
-                others = [v for v in tyre_vals if v != min_tyre]
-                
-                if others:
-                    avg_others = sum(others) / len(others)
-                    if avg_others > 0:
-                        # Calculate percentage drop of the minimum tyre compared to the average of the rest
-                        delta_pct = (avg_others - min_tyre) / avg_others * 100
-                        
-                        if delta_pct > 30:
-                            min_tyre = f"ALERT ({int(min_tyre)} - {int(delta_pct)}%)"
-                        elif delta_pct > 10:
-                            min_tyre = f"Warning ({int(min_tyre)} - {int(delta_pct)}%)"
-                        else:
-                            min_tyre = f"OK ({int(min_tyre)})"
-                    else:
-                        min_tyre = f"OK ({int(min_tyre)})"
-                else:
-                    min_tyre = f"OK ({int(min_tyre)})"
-            else:
-                min_tyre = tyre_vals[0] if tyre_vals else "OK"
+            # Compute live distances for Trip A and B
+            live_dist_a = max(0.0, current_odo - active_a_start_odo) if active_a_start_odo and current_odo > 0 else 0.0
+            live_dist_b = max(0.0, current_odo - active_b_start_odo) if active_b_start_odo and current_odo > 0 else 0.0
 
             return {
                 "status": "ok",
                 "car_status": car_status,
-                "odo": float(odo or 0.0),
-                "battery": float(battery_pct),
-                "battery_kwh": float(battery_kwh),
-                "fuel_pct": float(fuel_pct or 0.0),
-                "volt12": float(volt12 or 0.0),
+                "odo": current_odo,
+                "battery": battery_pct_val,
+                "battery_kwh": battery_kwh,
+                "fuel_pct": fuel_val,
+                "volt12": volt12_val,
                 "min_tyre": min_tyre,
+                "dist_a": live_dist_a,
+                "dist_b": live_dist_b,
                 "msg": f"Telemetry active ({car_status})",
             }
 
         return {
             "status": "empty_db", "car_status": "OFFLINE", "odo": 0.0,
             "battery": 0.0, "battery_kwh": 0.0, "fuel_pct": 0.0,
-            "volt12": 0.0, "min_tyre": "--", "msg": "No database found"
+            "volt12": 0.0, "min_tyre": "--", "msg": "No database found",
+            "dist_a": 0.0, "dist_b": 0.0
         }
     except Exception as e:
         print(f"Telemetry fetch error: {e}")
         return {
             "status": "error", "car_status": "OFFLINE", "odo": 0.0,
             "battery": 0.0, "battery_kwh": 0.0, "fuel_pct": 0.0,
-            "volt12": 0.0, "min_tyre": "Error", "msg": str(e)
+            "volt12": 0.0, "min_tyre": "Error", "msg": str(e),
+            "dist_a": 0.0, "dist_b": 0.0
         }
 
 
-def calculate_trip_cost(distance, start_bat, end_bat, start_fuel, end_fuel, rates):
+def calculate_trip_cost(distance, start_bat, end_bat, start_fuel, end_fuel, kwh_added, fuel_added, rates):
   if not distance or distance <= 0:
     return 0.0, 0.0
 
-  # Since start_bat and end_bat are already in kWh:
-  kwh_used = max(0.0, (start_bat or 0.0) - (end_bat or 0.0))
+  total_start_batt = (start_bat or 0.0) + kwh_added
+  kwh_used = max(0.0, total_start_batt - (end_bat or 0.0))
   elec_cost = kwh_used * rates["elec_price_per_kwh"]
 
-  fuel_drop = max(0.0, (start_fuel or 0.0) - (end_fuel or 0.0))
-  liters_used = (fuel_drop / 100.0) * rates["fuel_tank_capacity_l"]
+  total_start_fuel = (start_fuel or 0.0) + fuel_added
+  fuel_drop = max(0.0, total_start_fuel - (end_fuel or 0.0))
+  liters_used = (fuel_drop / 100.0) * rates["fuel_tank_capacity_l"] if fuel_drop > 0 else 0.0
   fuel_cost = liters_used * rates["fuel_price_per_l"]
 
   total_cost = elec_cost + fuel_cost
@@ -280,7 +226,6 @@ HTML_TEMPLATE = """
         .led-ok { background-color: #2ecc71; box-shadow: 0 0 10px #2ecc71; }
         .led-empty { background-color: #f39c12; box-shadow: 0 0 10px #f39c12; }
         .led-error { background-color: #e74c3c; box-shadow: 0 0 10px #e74c3c; }
-        /* ADD YOUR NEW CSS HERE: */
         .sub-status-bar {
             display: flex;
             justify-content: center;
@@ -326,7 +271,6 @@ HTML_TEMPLATE = """
             <span id="led-status" class="led-indicator led-empty" title="Checking status..."></span>
             <h1>🚗 PHEV Dual-Trip Tracker</h1>
         </div>
-        <!-- NEW: Sub-header Status Bar for 12V and Tyre Min -->
         <div class="sub-status-bar">
             <span>⚡ 12V: <strong id="val-volt12">{{ "%.1f"|format(telemetry.volt12) }}V</strong></span>
             <span>|</span>
@@ -461,7 +405,6 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
-    <!-- Live Telemetry & LED Diagnosis Script -->
     <script>
         function checkTelemetryStatus() {
             fetch('/api/telemetry_status')
@@ -481,7 +424,6 @@ HTML_TEMPLATE = """
                             led.title = "Car Status: OFFLINE / Dark";
                         }
                     }
-                    // --- NEW: Live update Voltage and Tyre Status ---
                     const voltEl = document.getElementById('val-volt12');
                     if (voltEl && data.volt12 !== undefined) {
                         voltEl.innerText = data.volt12.toFixed(1) + 'V';
@@ -491,16 +433,15 @@ HTML_TEMPLATE = """
                     if (tyreEl && data.min_tyre !== undefined) {
                         tyreEl.innerText = data.min_tyre;
                     }
-                    // Update Trip A and Trip B live active mileage on the screen
                     if (data.dist_a !== undefined) {
-                        const distAEl = document.getElementById('trip-a-mileage-value'); // Make sure this matches your Trip A element ID
+                        const distAEl = document.getElementById('trip-a-mileage-value');
                         if (distAEl) {
                             distAEl.innerText = data.dist_a.toFixed(1) + ' km';
                         }
                     }
 
                     if (data.dist_b !== undefined) {
-                        const distBEl = document.getElementById('trip-b-mileage-value'); // Make sure this matches your Trip B element ID
+                        const distBEl = document.getElementById('trip-b-mileage-value');
                         if (distBEl) {
                             distBEl.innerText = data.dist_b.toFixed(1) + ' km';
                         }
@@ -516,9 +457,8 @@ HTML_TEMPLATE = """
                 });
         }
 
-        // Run immediately on page load, then poll every 3 to 10 seconds
         checkTelemetryStatus();
-        setInterval(checkTelemetryStatus, 10000); // Poll every 3 seconds for smooth live feedback
+        setInterval(checkTelemetryStatus, 10000);
     </script>
 </body>
 </html>
@@ -527,79 +467,98 @@ HTML_TEMPLATE = """
 
 @app.route("/")
 def index():
-  rates = load_rates()
-  db = get_db()
-  active_a = db.execute(
-      "SELECT * FROM trips WHERE trip_type = 'A' AND status = 'ACTIVE' LIMIT 1"
-  ).fetchone()
-  active_b = db.execute(
-      "SELECT * FROM trips WHERE trip_type = 'B' AND status = 'ACTIVE' LIMIT 1"
-  ).fetchone()
-
-  current_telemetry = fetch_car_telemetry()
-  current_odo = current_telemetry.get("odo", 0.0)
-
-  live_dist_a = 0.0
-  if active_a and current_odo > 0:
-    live_dist_a = max(0.0, current_odo - active_a["start_odo"])
-
-  live_dist_b = 0.0
-  if active_b and current_odo > 0:
-    live_dist_b = max(0.0, current_odo - active_b["start_odo"])
-
-  raw_completed = db.execute(
-      "SELECT * FROM trips WHERE status = 'COMPLETED' ORDER BY id DESC LIMIT 10"
-  ).fetchall()
-
-  completed_trips = []
-  for trip in raw_completed:
-    total_cost, cost_per_km = calculate_trip_cost(
-        trip["distance"],
-        trip["start_battery"],
-        trip["end_battery"],
-        trip["start_fuel"],
-        trip["end_fuel"],
-        rates,
-    )
-    cost_per_100km = cost_per_km * 100.0
+    rates = load_rates()
+    db = get_db()  # Connected to trips.db
     
-    # Calculate consumed amounts for display
-    batt_used_kwh = max(0.0, trip["start_battery"] - trip["end_battery"])
-    fuel_used_l = max(0.0, trip["start_fuel"] - trip["end_fuel"])
+    active_a = db.execute(
+        "SELECT * FROM trips WHERE trip_type = 'A' AND status = 'ACTIVE' LIMIT 1"
+    ).fetchone()
+    active_b = db.execute(
+        "SELECT * FROM trips WHERE trip_type = 'B' AND status = 'ACTIVE' LIMIT 1"
+    ).fetchone()
+
+    start_odo_a = active_a["start_odo"] if active_a else None
+    start_odo_b = active_b["start_odo"] if active_b else None
     
-    completed_trips.append({
-        "trip": trip, 
-        "total_cost": total_cost, 
-        "cost_per_100km": cost_per_100km,
-        "batt_used": batt_used_kwh,
-        "fuel_used": fuel_used_l
-    })
+    current_telemetry = fetch_car_telemetry(start_odo_a, start_odo_b)
 
-  active_a_dict = dict(active_a) if active_a else None
-  if active_a_dict:
-    active_a_dict["live_dist"] = (
-        live_dist_a if live_dist_a > 0 else (current_odo - active_a["start_odo"])
+    active_a_dict = dict(active_a) if active_a else None
+    if active_a_dict:
+        active_a_dict["live_dist"] = current_telemetry["dist_a"]
+
+    active_b_dict = dict(active_b) if active_b else None
+    if active_b_dict:
+        active_b_dict["live_dist"] = current_telemetry["dist_b"]
+
+    raw_completed = db.execute(
+        "SELECT * FROM trips WHERE status = 'COMPLETED' ORDER BY id DESC LIMIT 10"
+    ).fetchall()
+
+    completed_trips = []
+    
+    for trip in raw_completed:
+        kwh_added = 0.0
+        fuel_added = 0.0
+        
+        db_path = DB if DB else "carlinko.db"
+        if os.path.exists(db_path):
+            try:
+                with sqlite3.connect(db_path, timeout=5.0) as cl_conn:
+                    cl_cursor = cl_conn.cursor()
+                    cl_cursor.execute(
+                        "SELECT SUM(kwh_added) FROM charging_logs WHERE datetime(ts, 'unixepoch') BETWEEN ? AND ?",
+                        (trip["start_time"], trip["end_time"])
+                    )
+                    res_kwh = cl_cursor.fetchone()[0]
+                    kwh_added = res_kwh if res_kwh else 0.0
+
+                    cl_cursor.execute(
+                        "SELECT SUM(liters_added) FROM fuel_logs WHERE datetime(ts, 'unixepoch') BETWEEN ? AND ?",
+                        (trip["start_time"], trip["end_time"])
+                    )
+                    res_liters = cl_cursor.fetchone()[0]
+                    fuel_added = res_liters if res_liters else 0.0
+            except Exception:
+                pass
+
+        total_cost, cost_per_km = calculate_trip_cost(
+            trip["distance"],
+            trip["start_battery"],
+            trip["end_battery"],
+            trip["start_fuel"],
+            trip["end_fuel"],
+            kwh_added,
+            fuel_added,
+            rates,
+        )
+        cost_per_100km = cost_per_km * 100.0
+        
+        total_start_batt = trip["start_battery"] + kwh_added
+        batt_used_kwh = max(0.0, total_start_batt - trip["end_battery"])
+
+        total_start_fuel = trip["start_fuel"] + fuel_added
+        fuel_used_l = max(0.0, total_start_fuel - trip["end_fuel"])
+        
+        completed_trips.append({
+            "trip": trip, 
+            "total_cost": total_cost, 
+            "cost_per_100km": cost_per_100km,
+            "batt_used": batt_used_kwh,
+            "fuel_used": fuel_used_l
+        })
+
+    return render_template_string(
+        HTML_TEMPLATE,
+        active_a=active_a_dict,
+        active_b=active_b_dict,
+        completed_trips=completed_trips,
+        rates=rates,
+        telemetry=current_telemetry,
     )
-
-  active_b_dict = dict(active_b) if active_b else None
-  if active_b_dict:
-    active_b_dict["live_dist"] = (
-        live_dist_b if live_dist_b > 0 else (current_odo - active_b["start_odo"])
-    )
-
-  return render_template_string(
-      HTML_TEMPLATE,
-      active_a=active_a_dict,
-      active_b=active_b_dict,
-      completed_trips=completed_trips,
-      rates=rates,
-      telemetry=current_telemetry,  # <--- Pass telemetry object here
-  )
 
 
 @app.route("/api/telemetry_status", methods=["GET"])
 def telemetry_status_endpoint():
-  """JSON endpoint powering the frontend LED indicator and live metrics."""
   db = get_db()
   active_a = db.execute(
       "SELECT * FROM trips WHERE trip_type = 'A' AND status = 'ACTIVE' LIMIT 1"
@@ -608,22 +567,10 @@ def telemetry_status_endpoint():
       "SELECT * FROM trips WHERE trip_type = 'B' AND status = 'ACTIVE' LIMIT 1"
   ).fetchone()
 
-  data = fetch_car_telemetry()
-  current_odo = data.get("odo", 0.0)
+  start_odo_a = active_a["start_odo"] if active_a else None
+  start_odo_b = active_b["start_odo"] if active_b else None
 
-  # Calculate live distances for active trips
-  live_dist_a = 0.0
-  if active_a and current_odo > 0:
-    live_dist_a = max(0.0, current_odo - active_a["start_odo"])
-
-  live_dist_b = 0.0
-  if active_b and current_odo > 0:
-    live_dist_b = max(0.0, current_odo - active_b["start_odo"])
-
-  # Attach computed distances to the JSON dictionary
-  data["dist_a"] = live_dist_a
-  data["dist_b"] = live_dist_b
-
+  data = fetch_car_telemetry(start_odo_a, start_odo_b)
   return jsonify(data)
 
 
@@ -642,8 +589,8 @@ def start_trip(trip_type):
           trip_type,
           datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
           odo,
-          batt_kwh,       # Stored in kWh
-          fuel_liters,    # Stored in Liters
+          batt_kwh,
+          fuel_liters,
       ],
   )
   db.commit()
@@ -652,44 +599,45 @@ def start_trip(trip_type):
 
 @app.route("/end_trip/<trip_type>", methods=["POST"])
 def end_trip(trip_type):
-  data = fetch_car_telemetry()
-  db = get_db()
-  active_trip = db.execute(
-      "SELECT * FROM trips WHERE trip_type = ? AND status = 'ACTIVE' LIMIT 1",
-      [trip_type],
-  ).fetchone()
+    data = fetch_car_telemetry()
+    db = get_db()
+    active_trip = db.execute(
+        "SELECT * FROM trips WHERE trip_type = ? AND status = 'ACTIVE' LIMIT 1",
+        [trip_type],
+    ).fetchone()
 
-  if active_trip:
-    end_time = datetime.now().strftime("%Y-%m-%d %H:%M")
-    current_odo = data.get("odo", 0.0) or data.get("odometer", 0.0)
-    end_odo = current_odo if current_odo > 0 else active_trip["start_odo"]
-    if end_odo < active_trip["start_odo"]:
+    if active_trip:
+        end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        current_odo = data.get("odo", 0.0)
+        end_odo = current_odo if current_odo > 0 else active_trip["start_odo"]
+        if end_odo < active_trip["start_odo"]:
             end_odo = active_trip["start_odo"]
-      
-    distance = end_odo - active_trip["start_odo"]
+            
+        distance = end_odo - active_trip["start_odo"]
 
-    # Convert percentages to kWh (18.3 kWh total) and Liters (60L tank) inline
-    end_battery_kwh = (data.get("battery", 0.0) / 100.0) * 18.3
-    end_fuel_liters = (data.get("fuel_pct", 0.0) / 100.0) * 60.0
-    
-    db.execute(
-        """
-            UPDATE trips 
-            SET end_time = ?, end_odo = ?, end_battery = ?, end_fuel = ?, distance = ?, status = 'COMPLETED'
-            WHERE id = ?
-        """,
-        [
-            end_time,
-            end_odo,
-            end_battery_kwh,    # <--- Now storing kWh instead of %
-            end_fuel_liters,    # <--- Now storing Liters instead of %
-            distance,
-            active_trip["id"],
-        ],
-    )
-    db.commit()
+        # Convert percentages to kWh (18.3 kWh total) and Liters (60L tank)
+        end_battery_kwh = (data.get("battery", 0.0) / 100.0) * TOTAL_BATTERY_KWH
+        end_fuel_liters = (data.get("fuel_pct", 0.0) / 100.0) * TOTAL_FUEL_LITERS
+        
+        db.execute(
+            """
+                UPDATE trips 
+                SET end_time = ?, end_odo = ?, end_battery = ?, end_fuel = ?, distance = ?, status = 'COMPLETED'
+                WHERE id = ?
+            """,
+            [
+                end_time,
+                end_odo,
+                end_battery_kwh,
+                end_fuel_liters,
+                distance,
+                active_trip["id"],
+            ],
+        )
+        db.commit()
 
-  return redirect(url_for("index"))
+    return redirect(url_for("index"))
 
 
 @app.route("/update_rates", methods=["POST"])
