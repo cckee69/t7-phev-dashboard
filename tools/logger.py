@@ -101,7 +101,7 @@ def decode(hexstr):
         d["speed"]     = int.from_bytes(b[14:16], "big") / 16.0
         
         # 12V battery voltage mapped from bytes 12-13 (big endian, 0.1V scale)
-        d["volt12"]    = int.from_bytes(b[12:14], "big") / 10.0
+        d["volt12"]    = int.from_bytes(b[12:14], "big") / 100.0
 
     if len(b) >= 22:
         d["fuel_pct"]  = b[21]
