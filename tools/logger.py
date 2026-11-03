@@ -106,13 +106,25 @@ def decode(hexstr):
     if len(b) >= 22:
         d["fuel_pct"]  = b[21]
 
-    # Unpack tyre pressures from bytes 44-52 (2 bytes per tyre)
-    if len(b) >= 52:
-        d["fl_pressure"] = int.from_bytes(b[44:46], "big")
-        d["fr_pressure"] = int.from_bytes(b[46:48], "big")
-        d["rl_pressure"] = int.from_bytes(b[48:50], "big")
-        d["rr_pressure"] = int.from_bytes(b[50:52], "big")
-        d["tyre_raw"] = evaluate_tyre_status(d)
+
+    # Unpack individual 1-byte tyre pressures from bytes 44-48
+    if len(b) >= 48:
+        fl = b[44]
+        fr = b[45]
+        rl = b[46]
+        rr = b[47]
+        
+        # Filter out invalid bytes (0xFF means no sensor data / uninitialized)
+        tyre_vals = [val for val in [fl, fr, rl, rr] if val != 0xFF]
+        
+        if tyre_vals:
+            d["fl_pressure"] = fl if fl != 0xFF else 0
+            d["fr_pressure"] = fr if fr != 0xFF else 0
+            d["rl_pressure"] = rl if rl != 0xFF else 0
+            d["rr_pressure"] = rr if rr != 0xFF else 0
+            d["tyre_raw"] = evaluate_tyre_status(d)
+        else:
+            d["tyre_raw"] = "--"
     else:
         d["tyre_raw"] = "--"
 
