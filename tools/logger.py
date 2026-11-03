@@ -92,22 +92,30 @@ def evaluate_tyre_status(decoded):
 def decode(hexstr):
     b = bytes.fromhex(hexstr)
     d = {"raw": hexstr}
-    if len(b) > 30:
-        d["battery"]  = b[28]
-        d["range_km"] = int.from_bytes(b[29:31], "big")
-        d["odo_guess"] = int.from_bytes(b[18:21], "big")  # validated =882 (0x0372)
-        d["unlocked"] = b[3] != 0                         # 0=locked (see docs/api-map.md -- verified #5)
-        d["speed"]    = int.from_bytes(b[14:16], "big") / 16.0
-        # Extract fuel percentage (byte 21)
-        if len(b) > 21:
-            d["fuel_pct"] = b[21]
-        # Extract 12V voltage if available in payload structure, defaulting to 0.0 or mapped field
-        d["volt12"] = 0.0 
-    if len(b) >= 52:
-        d["tyre_raw_bytes"] = b[44:52].hex()
     
-    # Run tyre health evaluation directly during decoding
-    d["tyre_raw"] = evaluate_tyre_status(d)
+    if len(b) > 30:
+        d["battery"]   = b[28]
+        d["range_km"]  = int.from_bytes(b[29:31], "big")
+        d["odo_guess"] = int.from_bytes(b[18:21], "big")
+        d["unlocked"]  = b[3] != 0
+        d["speed"]     = int.from_bytes(b[14:16], "big") / 16.0
+        
+        # 12V battery voltage mapped from bytes 12-13 (big endian, 0.1V scale)
+        d["volt12"]    = int.from_bytes(b[12:14], "big") / 10.0
+
+    if len(b) >= 22:
+        d["fuel_pct"]  = b[21]
+
+    # Unpack tyre pressures from bytes 44-52 (2 bytes per tyre)
+    if len(b) >= 52:
+        d["fl_pressure"] = int.from_bytes(b[44:46], "big")
+        d["fr_pressure"] = int.from_bytes(b[46:48], "big")
+        d["rl_pressure"] = int.from_bytes(b[48:50], "big")
+        d["rr_pressure"] = int.from_bytes(b[50:52], "big")
+        d["tyre_raw"] = evaluate_tyre_status(d)
+    else:
+        d["tyre_raw"] = "--"
+
     return d
 
 def connect(attempts=3):
