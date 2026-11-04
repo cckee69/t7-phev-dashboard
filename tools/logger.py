@@ -85,7 +85,7 @@ def evaluate_tyre_status(decoded):
                     return f"OK ({int(min_tyre)})"
         return f"OK ({int(min_tyre)})"
     elif tyre_vals:
-        return f"OK ({int(tyre_vals[0])})"
+        return f"OK ({int(tyre_vals[0]*1.7826)})"
     
     return "--"
 
