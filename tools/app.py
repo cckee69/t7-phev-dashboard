@@ -263,6 +263,11 @@ HTML_TEMPLATE = """
         .rates-field label { display: block; font-size: 0.7rem; color: #aaa; margin-bottom: 2px; }
         .rates-field input { width: 85%; padding: 6px; border-radius: 4px; border: 1px solid #333; background: #2a2a2a; color: #fff; font-size: 0.85rem; }
         details summary { cursor: pointer; color: #bbb; font-size: 0.85rem; }
+        table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 0.75rem; }
+        th, td { padding: 8px 2px; text-align: center; border-bottom: 1px solid #2c2c2c; }
+        th { color: #888; font-weight: 600; font-size: 0.7rem; }
+        td:nth-child(2) { font-size: 0.7rem; color: #aaa; white-space: nowrap; } /* Prevents date breaking */
+        .card-active {border: 1px solid #2e7d32;box-shadow: 0 0 12px rgba(46, 125, 50, 0.25);}
     </style>
 </head>
 <body>
@@ -285,7 +290,7 @@ HTML_TEMPLATE = """
                     <div class="status-text">In Progress...</div>
                     <div class="stat-value" id="timer-a">-- hr -- min</div>
                     <div class="stat-label">Elapsed Time</div>
-                    <div class="stat-value" id="trip-a-mileage-value">{{ "%.0f"|format(active_a.live_dist) if active_a.live_dist > 0 else '0.0' }} km</div>
+                    <div class="stat-value" id="trip-a-mileage-value">{{ "%d"|format(active_a.live_dist|int) if active_a.live_dist > 0 else '0.0' }} km</div>
                     <div class="stat-label">Active Mileage</div>
                     <form action="{{ url_for('end_trip', trip_type='A') }}" method="POST">
                         <button type="submit" class="btn btn-end">End Trip A</button>
@@ -324,7 +329,7 @@ HTML_TEMPLATE = """
                     <div class="status-text">In Progress...</div>
                     <div class="stat-value" id="timer-b">-- hr -- min</div>
                     <div class="stat-label">Elapsed Time</div>
-                    <div class="stat-value" id="trip-b-mileage-value">{{ "%.0f"|format(active_b.live_dist) if active_b.live_dist > 0 else '0.0' }} km</div>
+                    <div class="stat-value" id="trip-b-mileage-value">{{ "%d"|format(active_b.live_dist|int) if active_b.live_dist > 0 else '0.0' }} km</div>
                     <div class="stat-label">Active Mileage</div>
                     <form action="{{ url_for('end_trip', trip_type='B') }}" method="POST">
                         <button type="submit" class="btn btn-end">End Trip B</button>
@@ -385,22 +390,22 @@ HTML_TEMPLATE = """
                           <th>Bat kWh</th>
                           <th>Fuel L</th>
                           <th>Total Cost</th>
-                          <th>Cost/100km</th>
+                          <th>Cost/ 100km</th>
                       </tr>
                   </thead>
                   <tbody>
-                      {% for item in completed_trips %}
-                      <tr>
-                          <td> {{ item.trip.trip_type }}</td>
-                          <td>{{ item.trip.end_time }}</td>
-                          <td>{{ "%.0f"|format(item.trip.distance) }} </td>
-                          <td>{{ "%.2f"|format(item.batt_used) }} </td>
-                          <td>{{ "%.2f"|format(item.fuel_used) }} </td>
-                          <td>RM {{ "%.2f"|format(item.total_cost) }}</td>
-                          <td>RM {{ "%.2f"|format(item.cost_per_100km) }}</td>
-                      </tr>
-                      {% endfor %}
-                  </tbody>
+                    {% for item in completed_trips %}
+                    <tr>
+                        <td><span class="badge {{ 'badge-a' if item.trip.trip_type == 'A' else 'badge-b' }}">{{ item.trip.trip_type }}</span></td>
+                        <td>{{ item.trip.end_time[5:16] }}</td> <!-- Strips year (first 5 chars) and seconds (last 3 chars) -->
+                        <td>{{ "%.0f"|format(item.trip.distance) }}</td>
+                        <td>{{ "%.2f"|format(item.batt_used) }}</td>
+                        <td>{{ "%.0f"|format(item.fuel_used) }}</td>
+                        <td class="cost-highlight">RM {{ "%.2f"|format(item.total_cost) }}</td>
+                        <td>RM {{ "%.2f"|format(item.cost_per_100km) }}</td>
+                    </tr>
+                    {% endfor %}
+                 </tbody>
               </table>
         </div>
     </div>
