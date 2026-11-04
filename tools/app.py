@@ -441,14 +441,14 @@ HTML_TEMPLATE = """
                     if (data.dist_a !== undefined) {
                         const distAEl = document.getElementById('trip-a-mileage-value');
                         if (distAEl) {
-                            distAEl.innerText = data.dist_a.toFixed(1) + ' km';
+                            distAEl.innerText = data.dist_a.toFixed(0) + ' km';
                         }
                     }
 
                     if (data.dist_b !== undefined) {
                         const distBEl = document.getElementById('trip-b-mileage-value');
                         if (distBEl) {
-                            distBEl.innerText = data.dist_b.toFixed(1) + ' km';
+                            distBEl.innerText = data.dist_b.toFixed(0) + ' km';
                         }
                     }
                 })
