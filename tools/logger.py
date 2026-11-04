@@ -82,10 +82,10 @@ def evaluate_tyre_status(decoded):
                 elif delta_pct > 10:
                     return f"Warning ({int(min_tyre)} - {int(delta_pct)}%)"
                 else:
-                    return f"OK ({int(min_tyre)})"
-        return f"OK ({int(min_tyre)})"
+                    return f"OK ({int(min_tyre*1.7826)})"
+        return f"OK ({int(min_tyre*1.7826)})"
     elif tyre_vals:
-        return f"OK ({int(tyre_vals[0]*1.7826)})"
+        return f"OK ({int(tyre_vals[0])})"
     
     return "--"
 
