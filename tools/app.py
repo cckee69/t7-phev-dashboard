@@ -400,7 +400,7 @@ HTML_TEMPLATE = """
                         <td>{{ item.trip.end_time[5:16] }}</td> <!-- Strips year (first 5 chars) and seconds (last 3 chars) -->
                         <td>{{ "%.0f"|format(item.trip.distance) }}</td>
                         <td>{{ "%.2f"|format(item.batt_used) }}</td>
-                        <td>{{ "%.0f"|format(item.fuel_used) }}</td>
+                        <td>{{ "%.1f"|format(item.fuel_used) }}</td>
                         <td class="cost-highlight">RM {{ "%.2f"|format(item.total_cost) }}</td>
                         <td>RM {{ "%.2f"|format(item.cost_per_100km) }}</td>
                     </tr>
@@ -539,7 +539,7 @@ def index():
         cost_per_100km = cost_per_km * 100.0
         
         total_start_batt = trip["start_battery"] + kwh_added
-        batt_used_kwh = max(0.0, total_start_batt - trip["end_battery"])
+        batt_used_kwh = total_start_batt - trip["end_battery"]
 
         total_start_fuel = trip["start_fuel"] + fuel_added
         fuel_used_l = max(0.0, total_start_fuel - trip["end_fuel"])
