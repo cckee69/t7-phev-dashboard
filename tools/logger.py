@@ -153,6 +153,48 @@ def reload_config():
     if os.path.exists(_TOKEN_FILE):
         TOKEN = open(_TOKEN_FILE).read().strip() or TOKEN
 
+def check_parking_deltas(conn, d, ts):
+    cursor = conn.cursor()
+    
+    # Fetch the last valid recorded battery and fuel state (removed 'WHERE online = 1' so parked/charging states are tracked)
+    cursor.execute("SELECT battery, fuel_pct FROM telemetry ORDER BY ts DESC LIMIT 1;")
+    last_row = cursor.fetchone()
+    
+    curr_battery = d.get("battery")
+    curr_fuel = d.get("fuel_pct")
+    
+    event_detected = False
+
+    if last_row:
+        last_battery, last_fuel = last_row
+        
+        # 1. Check for stationary Battery increase (External Charging)
+        if last_battery is not None and curr_battery is not None:
+            bat_diff = curr_battery - last_battery
+            if bat_diff > 0:
+                est_kwh = bat_diff * 0.183  
+                cursor.execute(
+                    "INSERT INTO charging_logs (ts, kwh_added) VALUES (?, ?);",
+                    (ts, est_kwh)
+                )
+                print(f"[Auto-Log] Charging detected: +{bat_diff}% battery jump (Est. {est_kwh:.2f} kWh)")
+                event_detected = True
+
+        # 2. Check for stationary Fuel increase (Refueling)
+        if last_fuel is not None and curr_fuel is not None:
+            fuel_diff = curr_fuel - last_fuel
+            if fuel_diff > 1:  
+                est_liters = fuel_diff * 0.6  
+                cursor.execute(
+                    "INSERT INTO fuel_logs (ts, liters_added) VALUES (?, ?);",
+                    (ts, est_liters)
+                )
+                print(f"[Auto-Log] Refuel detected: +{fuel_diff}% fuel jump (Est. {est_liters:.1f} Liters)")
+                event_detected = True
+
+    conn.commit()
+    return event_detected
+
 def poll_once(conn, _retried=False):
     global TOKEN
     if not _retried:
@@ -196,22 +238,43 @@ def poll_once(conn, _retried=False):
     dt = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
     if blob:
         d = decode(blob)
-        # Determine online flag state (1 = active if speed > 0 or unlocked, 2 = parked if stationary, 0 = offline)
         speed = d.get("speed", 0.0) or 0.0
         unlocked = d.get("unlocked", False)
-        online_flag = 1 if (speed > 0.0 ) else 2
+        online_flag = 1 if speed > 0.0 else 2  # Defined properly here
+        
+        # Determine motion state and handling
+        if speed > 0.0:
+            # ACTIVE state: Write telemetry continuously as vehicle moves
+            conn.execute(
+                "INSERT OR REPLACE INTO telemetry VALUES (?,?,?,?,?,?,?,?,?)",
+                (ts, dt, d.get("battery"), d.get("fuel_pct"), d.get("odo_guess"),
+                 d.get("tyre_raw"), online_flag, d.get("volt12", 0.0), speed))
+            print(f"{dt}  battery={d.get('battery')}%  fuel={d.get('fuel_pct')}%  range={d.get('range_km')}km  "
+                  f"odo?={d.get('odo_guess')}  spd={speed}  tyre={d.get('tyre_raw')}  unl={unlocked}")
+            conn.commit()
+        
+        else:
+            # PARKED state (speed == 0): Use check_parking_deltas to decide logging/writing
+            is_topped_up = check_parking_deltas(conn, d, ts)
+            
+            if is_topped_up:
+                conn.execute(
+                    "INSERT OR REPLACE INTO telemetry VALUES (?,?,?,?,?,?,?,?,?)",
+                    (ts, dt, d.get("battery"), d.get("fuel_pct"), d.get("odo_guess"),
+                     d.get("tyre_raw"), online_flag, d.get("volt12", 0.0), speed))
+                print(f"{dt}  battery={d.get('battery')}%  fuel={d.get('fuel_pct')}%  range={d.get('range_km')}km  "
+                      f"odo?={d.get('odo_guess')}  spd={speed}  tyre={d.get('tyre_raw')}  unl={unlocked}")
+                conn.commit()
+                print(f"{dt} [PARKED & TOPPED UP] Logged new baseline telemetry.")
+            else:
+                print(f"{dt} [PARKED] Stationary — no delta detected, skipping redundant telemetry write.")
 
-        conn.execute(
-            "INSERT OR REPLACE INTO telemetry VALUES (?,?,?,?,?,?,?,?,?)",
-            (ts, dt, d.get("battery"), d.get("fuel_pct"), d.get("odo_guess"),
-             d.get("tyre_raw"), online_flag, d.get("volt12", 0.0), speed))
-        print(f"{dt}  battery={d.get('battery')}%  fuel={d.get('fuel_pct')}%  range={d.get('range_km')}km  "
-              f"odo?={d.get('odo_guess')}  spd={speed}  tyre={d.get('tyre_raw')}  unl={unlocked}")
         return d
-    
-    # Empty blob / offline state (online = 0)
-    conn.execute("INSERT OR REPLACE INTO telemetry VALUES (?,?,?,?,?,?,?,?,?)",
+
+    # Offline Fallband (Fixed to supply all 9 columns matching schema)
+    conn.execute("INSERT INTO telemetry VALUES (?,?,?,?,?,?,?,?,?)",
                  (ts, dt, None, None, None, None, 0, None, None))
+    conn.commit()
     print(f"{dt}  (no blob — car offline/basement)")
     return None
 
