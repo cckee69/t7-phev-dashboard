@@ -189,7 +189,7 @@ def calculate_trip_cost(distance, start_bat, end_bat, start_fuel, end_fuel, rate
 
     # Since start_bat and start_fuel already include any overnight/mid-trip additions 
     # (updated upon trip completion), we just do direct subtraction:
-    kwh_used = (start_bat or 0.0) - (end_bat or 0.0))
+    kwh_used = (start_bat or 0.0) - (end_bat or 0.0)
     elec_cost = kwh_used * rates["elec_price_per_kwh"]
 
     liters_used = max(0.0, (start_fuel or 0.0) - (end_fuel or 0.0))
