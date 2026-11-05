@@ -183,17 +183,16 @@ def fetch_car_telemetry(active_a_start_odo=None, active_b_start_odo=None):
         }
 
 
-def calculate_trip_cost(distance, start_bat, end_bat, start_fuel, end_fuel, kwh_added, fuel_added, rates):
+def calculate_trip_cost(distance, start_bat, end_bat, start_fuel, end_fuel, rates):
     if not distance or distance <= 0:
         return 0.0, 0.0
 
-    total_start_batt = (start_bat or 0.0) + kwh_added
-    kwh_used = total_start_batt - (end_bat or 0.0)
+    # Since start_bat and start_fuel already include any overnight/mid-trip additions 
+    # (updated upon trip completion), we just do direct subtraction:
+    kwh_used = (start_bat or 0.0) - (end_bat or 0.0))
     elec_cost = kwh_used * rates["elec_price_per_kwh"]
 
-    total_start_fuel = (start_fuel or 0.0) + fuel_added
-    # Since start_fuel and end_fuel are already in Liters, drop is direct:
-    liters_used = max(0.0, total_start_fuel - (end_fuel or 0.0))
+    liters_used = max(0.0, (start_fuel or 0.0) - (end_fuel or 0.0))
     fuel_cost = liters_used * rates["fuel_price_per_l"]
 
     total_cost = elec_cost + fuel_cost
@@ -612,7 +611,7 @@ def end_trip(trip_type):
     ).fetchone()
 
     if active_trip:
-        end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        end_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         current_odo = data.get("odo", 0.0)
         end_odo = current_odo if current_odo > 0 else active_trip["start_odo"]
@@ -625,18 +624,47 @@ def end_trip(trip_type):
         end_battery_kwh = (data.get("battery", 0.0) / 100.0) * TOTAL_BATTERY_KWH
         end_fuel_liters = (data.get("fuel_pct", 0.0) / 100.0) * TOTAL_FUEL_LITERS
         
+        # --- QUERY LOGS FOR TOTAL ADDITIONS DURING THIS TRIP ---
+        # Assuming start_time and end_time in trips table can be compared with logs.
+        # If your logs use epoch integers for 'ts', convert start_time/end_time accordingly.
+        trip_start = active_trip["start_time"]
+        
+        # Get total kWh added from charging logs during this trip window
+        kwh_added_res = db.execute(
+            "SELECT SUM(kwh_added) FROM charging_logs WHERE ts BETWEEN ? AND ?",
+            [trip_start, end_time_str]
+        ).fetchone()
+        total_kwh_added = kwh_added_res[0] if kwh_added_res and kwh_added_res[0] else 0.0
+
+        # Get total liters added from fuel logs during this trip window
+        fuel_added_res = db.execute(
+            "SELECT SUM(liters_added) FROM fuel_logs WHERE ts BETWEEN ? AND ?",
+            [trip_start, end_time_str]
+        ).fetchone()
+        total_fuel_added = fuel_added_res[0] if fuel_added_res and fuel_added_res[0] else 0.0
+        # -----------------------------------------------------
+
         db.execute(
             """
                 UPDATE trips 
-                SET end_time = ?, end_odo = ?, end_battery = ?, end_fuel = ?, distance = ?, status = 'COMPLETED'
+                SET end_time = ?, 
+                    end_odo = ?, 
+                    end_battery = ?, 
+                    end_fuel = ?, 
+                    distance = ?, 
+                    battery_start = battery_start + ?,
+                    fuel_start = fuel_start + ?,
+                    status = 'COMPLETED'
                 WHERE id = ?
             """,
             [
-                end_time,
+                end_time_str,
                 end_odo,
                 end_battery_kwh,
                 end_fuel_liters,
                 distance,
+                total_kwh_added,
+                total_fuel_added,
                 active_trip["id"],
             ],
         )
