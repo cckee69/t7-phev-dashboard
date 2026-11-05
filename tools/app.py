@@ -527,9 +527,9 @@ def index():
 
         total_cost, cost_per_km = calculate_trip_cost(
             trip["distance"],
-            trip["battery_start"],
+            trip["start_battery"],  # <-- updated key name
             trip["end_battery"],
-            trip["fuel_start"],
+            trip["start_fuel"],     # <-- updated key name
             trip["end_fuel"],
             rates,
         )
