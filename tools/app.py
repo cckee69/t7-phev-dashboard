@@ -527,12 +527,10 @@ def index():
 
         total_cost, cost_per_km = calculate_trip_cost(
             trip["distance"],
-            trip["start_battery"],
+            trip["battery_start"],
             trip["end_battery"],
-            trip["start_fuel"],
+            trip["fuel_start"],
             trip["end_fuel"],
-            kwh_added,
-            fuel_added,
             rates,
         )
         cost_per_100km = cost_per_km * 100.0
