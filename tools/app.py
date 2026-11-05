@@ -184,22 +184,22 @@ def fetch_car_telemetry(active_a_start_odo=None, active_b_start_odo=None):
 
 
 def calculate_trip_cost(distance, start_bat, end_bat, start_fuel, end_fuel, kwh_added, fuel_added, rates):
-  if not distance or distance <= 0:
-    return 0.0, 0.0
+    if not distance or distance <= 0:
+        return 0.0, 0.0
 
-  total_start_batt = (start_bat or 0.0) + kwh_added
-  kwh_used = max(0.0, total_start_batt - (end_bat or 0.0))
-  elec_cost = kwh_used * rates["elec_price_per_kwh"]
+    total_start_batt = (start_bat or 0.0) + kwh_added
+    kwh_used = total_start_batt - (end_bat or 0.0)
+    elec_cost = kwh_used * rates["elec_price_per_kwh"]
 
-  total_start_fuel = (start_fuel or 0.0) + fuel_added
-  fuel_drop = max(0.0, total_start_fuel - (end_fuel or 0.0))
-  liters_used = (fuel_drop / 100.0) * rates["fuel_tank_capacity_l"] if fuel_drop > 0 else 0.0
-  fuel_cost = liters_used * 1.99
+    total_start_fuel = (start_fuel or 0.0) + fuel_added
+    # Since start_fuel and end_fuel are already in Liters, drop is direct:
+    liters_used = max(0.0, total_start_fuel - (end_fuel or 0.0))
+    fuel_cost = liters_used * rates["fuel_price_per_l"]
 
-  total_cost = elec_cost + fuel_cost
-  cost_per_km = total_cost / distance if distance > 0 else 0.0
+    total_cost = elec_cost + fuel_cost
+    cost_per_km = total_cost / distance if distance > 0 else 0.0
 
-  return total_cost, cost_per_km
+    return total_cost, cost_per_km
 
 
 HTML_TEMPLATE = """
