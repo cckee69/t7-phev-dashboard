@@ -511,14 +511,14 @@ def index():
                 with sqlite3.connect(db_path, timeout=5.0) as cl_conn:
                     cl_cursor = cl_conn.cursor()
                     cl_cursor.execute(
-                        "SELECT SUM(kwh_added) FROM charging_logs WHERE datetime(ts, 'unixepoch') BETWEEN ? AND ?",
+                        "SELECT SUM(kwh_added) FROM charging_logs WHERE ts BETWEEN ? AND ?",
                         (trip["start_time"], trip["end_time"])
                     )
                     res_kwh = cl_cursor.fetchone()[0]
                     kwh_added = res_kwh if res_kwh else 0.0
 
                     cl_cursor.execute(
-                        "SELECT SUM(liters_added) FROM fuel_logs WHERE datetime(ts, 'unixepoch') BETWEEN ? AND ?",
+                        "SELECT SUM(liters_added) FROM fuel_logs WHERE ts BETWEEN ? AND ?",
                         (trip["start_time"], trip["end_time"])
                     )
                     res_liters = cl_cursor.fetchone()[0]
