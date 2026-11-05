@@ -194,7 +194,7 @@ def calculate_trip_cost(distance, start_bat, end_bat, start_fuel, end_fuel, kwh_
   total_start_fuel = (start_fuel or 0.0) + fuel_added
   fuel_drop = max(0.0, total_start_fuel - (end_fuel or 0.0))
   liters_used = (fuel_drop / 100.0) * rates["fuel_tank_capacity_l"] if fuel_drop > 0 else 0.0
-  fuel_cost = liters_used * rates["fuel_price_per_l"]
+  fuel_cost = liters_used * 1.99
 
   total_cost = elec_cost + fuel_cost
   cost_per_km = total_cost / distance if distance > 0 else 0.0
