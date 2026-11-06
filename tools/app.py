@@ -598,7 +598,6 @@ def start_trip(trip_type):
   db.commit()
   return redirect(url_for("index"))
 
-
 @app.route("/end_trip/<trip_type>", methods=["POST"])
 def end_trip(trip_type):
     data = fetch_car_telemetry()
@@ -609,7 +608,8 @@ def end_trip(trip_type):
     ).fetchone()
 
     if active_trip:
-        end_time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        end_time_dt = datetime.now()
+        end_time_str = end_time_dt.strftime("%Y-%m-%d %H:%M:%S")
         
         current_odo = data.get("odo", 0.0)
         end_odo = current_odo if current_odo > 0 else active_trip["start_odo"]
@@ -622,24 +622,37 @@ def end_trip(trip_type):
         end_battery_kwh = (data.get("battery", 0.0) / 100.0) * TOTAL_BATTERY_KWH
         end_fuel_liters = (data.get("fuel_pct", 0.0) / 100.0) * TOTAL_FUEL_LITERS
         
-        # --- QUERY LOGS FOR TOTAL ADDITIONS DURING THIS TRIP ---
-        # Assuming start_time and end_time in trips table can be compared with logs.
-        # If your logs use epoch integers for 'ts', convert start_time/end_time accordingly.
-        trip_start = active_trip["start_time"]
+        # --- QUERY LOGS FOR TOTAL ADDITIONS FROM carlinko.db ---
+        total_kwh_added = 0.0
+        total_fuel_added = 0.0
         
-        # Get total kWh added from charging logs during this trip window
-        kwh_added_res = db.execute(
-            "SELECT SUM(kwh_added) FROM charging_logs WHERE ts BETWEEN ? AND ?",
-            [trip_start, end_time_str]
-        ).fetchone()
-        total_kwh_added = kwh_added_res[0] if kwh_added_res and kwh_added_res[0] else 0.0
+        try:
+            import time
+            from datetime import datetime as dt
+            start_epoch = int(dt.strptime(active_trip["start_time"], "%Y-%m-%d %H:%M:%S").timestamp())
+            end_epoch = int(end_time_dt.timestamp())
 
-        # Get total liters added from fuel logs during this trip window
-        fuel_added_res = db.execute(
-            "SELECT SUM(liters_added) FROM fuel_logs WHERE ts BETWEEN ? AND ?",
-            [trip_start, end_time_str]
-        ).fetchone()
-        total_fuel_added = fuel_added_res[0] if fuel_added_res and fuel_added_res[0] else 0.0
+            with sqlite3.connect("carlinko.db") as log_conn:
+                log_cursor = log_conn.cursor()
+                
+                # Get total kWh added from charging logs during this trip window
+                kwh_added_res = log_cursor.execute(
+                    "SELECT SUM(kwh_added) FROM charging_logs WHERE ts BETWEEN ? AND ?",
+                    [start_epoch, end_epoch]
+                ).fetchone()
+                if kwh_added_res and kwh_added_res[0]:
+                    total_kwh_added = kwh_added_res[0]
+
+                # Get total liters added from fuel logs during this trip window
+                fuel_added_res = log_cursor.execute(
+                    "SELECT SUM(liters_added) FROM fuel_logs WHERE ts BETWEEN ? AND ?",
+                    [start_epoch, end_epoch]
+                ).fetchone()
+                if fuel_added_res and fuel_added_res[0]:
+                    total_fuel_added = fuel_added_res[0]
+                    
+        except Exception as e:
+            print(f"Log summation warning (defaulting to 0): {e}")
         # -----------------------------------------------------
 
         db.execute(
@@ -669,7 +682,6 @@ def end_trip(trip_type):
         db.commit()
 
     return redirect(url_for("index"))
-
 
 @app.route("/update_rates", methods=["POST"])
 def update_rates():
