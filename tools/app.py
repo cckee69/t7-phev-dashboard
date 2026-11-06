@@ -622,7 +622,7 @@ def end_trip(trip_type):
         end_battery_kwh = (data.get("battery", 0.0) / 100.0) * TOTAL_BATTERY_KWH
         end_fuel_liters = (data.get("fuel_pct", 0.0) / 100.0) * TOTAL_FUEL_LITERS
         
-        # --- QUERY LOGS FOR TOTAL ADDITIONS FROM carlinko.db ---
+        # --- QUERY LOGS FOR TOTAL ADDITIONS FROM carlinko.db (using DB variable) ---
         total_kwh_added = 0.0
         total_fuel_added = 0.0
         
@@ -632,28 +632,33 @@ def end_trip(trip_type):
             start_epoch = int(dt.strptime(active_trip["start_time"], "%Y-%m-%d %H:%M:%S").timestamp())
             end_epoch = int(end_time_dt.timestamp())
 
-            with sqlite3.connect("carlinko.db") as log_conn:
-                log_cursor = log_conn.cursor()
-                
-                # Get total kWh added from charging logs during this trip window
-                kwh_added_res = log_cursor.execute(
-                    "SELECT SUM(kwh_added) FROM charging_logs WHERE ts BETWEEN ? AND ?",
-                    [start_epoch, end_epoch]
-                ).fetchone()
-                if kwh_added_res and kwh_added_res[0]:
-                    total_kwh_added = kwh_added_res[0]
+            db_path = DB if DB else "carlinko.db"
+            if os.path.exists(db_path):
+                with sqlite3.connect(db_path) as log_conn:
+                    log_cursor = log_conn.cursor()
+                    
+                    # Check if tables exist first to prevent crashes
+                    tables = [row[0] for row in log_cursor.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+                    
+                    if "charging_logs" in tables:
+                        kwh_added_res = log_cursor.execute(
+                            "SELECT SUM(kwh_added) FROM charging_logs WHERE ts BETWEEN ? AND ?",
+                            [start_epoch, end_epoch]
+                        ).fetchone()
+                        if kwh_added_res and kwh_added_res[0]:
+                            total_kwh_added = kwh_added_res[0]
 
-                # Get total liters added from fuel logs during this trip window
-                fuel_added_res = log_cursor.execute(
-                    "SELECT SUM(liters_added) FROM fuel_logs WHERE ts BETWEEN ? AND ?",
-                    [start_epoch, end_epoch]
-                ).fetchone()
-                if fuel_added_res and fuel_added_res[0]:
-                    total_fuel_added = fuel_added_res[0]
+                    if "fuel_logs" in tables:
+                        fuel_added_res = log_cursor.execute(
+                            "SELECT SUM(liters_added) FROM fuel_logs WHERE ts BETWEEN ? AND ?",
+                            [start_epoch, end_epoch]
+                        ).fetchone()
+                        if fuel_added_res and fuel_added_res[0]:
+                            total_fuel_added = fuel_added_res[0]
                     
         except Exception as e:
             print(f"Log summation warning (defaulting to 0): {e}")
-        # -----------------------------------------------------
+        # --------------------------------------------------------------------------
 
         db.execute(
             """
@@ -663,8 +668,8 @@ def end_trip(trip_type):
                     end_battery = ?, 
                     end_fuel = ?, 
                     distance = ?, 
-                    battery_start = battery_start + ?,
-                    fuel_start = fuel_start + ?,
+                    start_battery = start_battery + ?,
+                    start_fuel = start_fuel + ?,
                     status = 'COMPLETED'
                 WHERE id = ?
             """,
