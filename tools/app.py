@@ -135,7 +135,8 @@ def fetch_car_telemetry(active_a_start_odo=None, active_b_start_odo=None):
             age = time.time() - ts
 
             # --- Direct State Machine using online flag & age ---
-            if age > HOLD or online_flag == 0:
+            #if age > HOLD or online_flag == 0:
+            if online_flag == 0:
                 car_status = "OFFLINE"
             elif online_flag == 1 or (speed is not None and speed > 0.0):
                 car_status = "ACTIVE"
