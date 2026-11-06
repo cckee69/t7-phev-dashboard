@@ -195,11 +195,14 @@ def check_parking_deltas(conn, d, ts):
     conn.commit()
     return event_detected
 
+# Define this near the top of your logger script outside the function
+consecutive_zero_speed = 0
+
 def poll_once(conn, _retried=False):
-    global TOKEN
+    global TOKEN, consecutive_zero_speed
     if not _retried:
         reload_config()
-        conn.executescript(SCHEMA)          # idempotent: ensure the tables exist for any caller
+        conn.executescript(SCHEMA)
     ws = connect()
     try:
         ws.send(json.dumps({"action": 1, "data": {"token": TOKEN, "vehicleId": VEHICLE}}))
@@ -240,11 +243,14 @@ def poll_once(conn, _retried=False):
         d = decode(blob)
         speed = d.get("speed", 0.0) or 0.0
         unlocked = d.get("unlocked", False)
-        online_flag = 1 if speed > 0.0 else 2  # Defined properly here
         
-        # Determine motion state and handling
+        # Determine motion state with counter logic
         if speed > 0.0:
-            # ACTIVE state: Write telemetry continuously as vehicle moves
+            # Reset counter because vehicle is actively moving
+            consecutive_zero_speed = 0
+            online_flag = 1
+            
+            # ACTIVE state: Write telemetry continuously
             conn.execute(
                 "INSERT OR REPLACE INTO telemetry VALUES (?,?,?,?,?,?,?,?,?)",
                 (ts, dt, d.get("battery"), d.get("fuel_pct"), d.get("odo_guess"),
@@ -252,26 +258,37 @@ def poll_once(conn, _retried=False):
             print(f"{dt}  battery={d.get('battery')}%  fuel={d.get('fuel_pct')}%  range={d.get('range_km')}km  "
                   f"odo?={d.get('odo_guess')}  spd={speed}  tyre={d.get('tyre_raw')}  unl={unlocked}")
             conn.commit()
-        
-        else:
-            # PARKED state (speed == 0): Use check_parking_deltas to decide logging/writing
-            is_topped_up = check_parking_deltas(conn, d, ts)
             
-            if is_topped_up:
+        else:
+            # Speed is 0 or missing — increment our zero-speed counter
+            consecutive_zero_speed += 1
+            online_flag = 2
+            
+            # If we have seen zero speed fewer than 3 times, FORCE write to capture the stop
+            if consecutive_zero_speed <= 3:
                 conn.execute(
                     "INSERT OR REPLACE INTO telemetry VALUES (?,?,?,?,?,?,?,?,?)",
                     (ts, dt, d.get("battery"), d.get("fuel_pct"), d.get("odo_guess"),
                      d.get("tyre_raw"), online_flag, d.get("volt12", 0.0), speed))
-                print(f"{dt}  battery={d.get('battery')}%  fuel={d.get('fuel_pct')}%  range={d.get('range_km')}km  "
-                      f"odo?={d.get('odo_guess')}  spd={speed}  tyre={d.get('tyre_raw')}  unl={unlocked}")
+                print(f"{dt} [STOPPING BUFFER {consecutive_zero_speed}/3] battery={d.get('battery')}%  spd={speed}")
                 conn.commit()
-                print(f"{dt} [PARKED & TOPPED UP] Logged new baseline telemetry.")
             else:
-                print(f"{dt} [PARKED] Stationary — no delta detected, skipping redundant telemetry write.")
+                # After 3 consecutive writes at zero speed, consider fully static and rely on check_parking_deltas
+                is_topped_up = check_parking_deltas(conn, d, ts)
+                
+                if is_topped_up:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO telemetry VALUES (?,?,?,?,?,?,?,?,?)",
+                        (ts, dt, d.get("battery"), d.get("fuel_pct"), d.get("odo_guess"),
+                         d.get("tyre_raw"), online_flag, d.get("volt12", 0.0), speed))
+                    conn.commit()
+                    print(f"{dt} [PARKED & TOPPED UP] Logged new baseline telemetry.")
+                else:
+                    print(f"{dt} [PARKED] Stationary — no delta detected, skipping redundant telemetry write.")
 
         return d
 
-    # Offline Fallband (Fixed to supply all 9 columns matching schema)
+    # Offline Fallband
     conn.execute("INSERT INTO telemetry VALUES (?,?,?,?,?,?,?,?,?)",
                  (ts, dt, None, None, None, None, 0, None, None))
     conn.commit()
