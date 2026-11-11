@@ -139,7 +139,7 @@ def fetch_car_telemetry(active_a_start_odo=None, active_b_start_odo=None):
             if online_flag == 0:
                 car_status = "OFFLINE"
             #elif online_flag == 1 or (speed is not None and speed > 0.0):
-            elif online_flag == 1 or age < HOLD
+            elif online_flag == 1 or age < HOLD:
                 car_status = "ACTIVE"
             else:
                 car_status = "PARKED"
