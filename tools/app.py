@@ -209,6 +209,8 @@ HTML_TEMPLATE = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PHEV Dual-Trip Tracker</title>
+    <!-- Include Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #121212; color: #e0e0e0; margin: 0; padding: 16px; display: flex; justify-content: center; }
         .container { width: 100%; max-width: 520px; }
@@ -251,6 +253,11 @@ HTML_TEMPLATE = """
         .status-text { font-size: 0.9rem; margin-bottom: 12px; color: #b0bec5; }
         .stat-value { font-size: 1.1rem; font-weight: bold; color: #4caf50; margin-bottom: 2px; }
         .stat-label { font-size: 0.75rem; color: #888; text-transform: uppercase; margin-bottom: 10px; }
+        
+        /* Efficiency Chart Card Styles */
+        .chart-card { background: #1e1e1e; border-radius: 12px; padding: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); margin-bottom: 16px; text-align: center; }
+        .chart-container { position: relative; height: 220px; width: 100%; margin-top: 10px; }
+
         table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.8rem; }
         th, td { padding: 8px 4px; text-align: left; border-bottom: 1px solid #2c2c2c; }
         th { color: #888; font-weight: 600; }
@@ -267,7 +274,7 @@ HTML_TEMPLATE = """
         th, td { padding: 8px 2px; text-align: center; border-bottom: 1px solid #2c2c2c; }
         th { color: #888; font-weight: 600; font-size: 0.7rem; }
         td:nth-child(2) { font-size: 0.7rem; color: #aaa; white-space: nowrap; } /* Prevents date breaking */
-        .card-active {border: 1px solid #2e7d32;box-shadow: 0 0 12px rgba(46, 125, 50, 0.25);}
+        .card-active { border: 1px solid #2e7d32; box-shadow: 0 0 12px rgba(46, 125, 50, 0.25); }
     </style>
 </head>
 <body>
@@ -361,6 +368,15 @@ HTML_TEMPLATE = """
             </div>
         </div>
 
+        <!-- 5-MINUTE INTERVAL EFFICIENCY BAR CHART CARD -->
+        <div class="chart-card">
+            <div class="card-title" style="margin-bottom: 4px;">Efficiency Trend</div>
+            <div style="font-size: 0.75rem; color: #888; text-transform: uppercase; margin-bottom: 10px;">RM / 100km (5-Min Intervals)</div>
+            <div class="chart-container">
+                <canvas id="efficiencyChart"></canvas>
+            </div>
+        </div>
+
         <!-- SETTINGS & HISTORY CARD -->
         <div class="card" style="text-align: left;">
             <details style="margin-bottom: 12px;">
@@ -411,6 +427,73 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
+        // Initialize Chart.js Bar Chart
+        const ctx = document.getElementById('efficiencyChart').getContext('2d');
+        const efficiencyChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'RM / 100km',
+                    data: [],
+                    backgroundColor: 'rgba(76, 175, 80, 0.6)',
+                    borderColor: 'rgba(76, 175, 80, 1)',
+                    borderWidth: 1,
+                    borderRadius: 4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: '#2c2c2c' },
+                        ticks: { color: '#aaa', font: { size: 10 } },
+                        title: { display: false }
+                    },
+                    x: {
+                        grid: { display: false },
+                        ticks: { color: '#aaa', font: { size: 10 } }
+                    }
+                }
+            }
+        });
+
+        // Function to update the 5-minute efficiency chart
+        async function updateEfficiencyChart() {
+            try {
+                const response = await fetch('/api/efficiency-trend');
+                const data = await response.json();
+                
+                let labels = data.labels;
+                let efficiency = data.efficiency;
+                
+                // Truncate to maximum 12 bars (60 minutes rolling window)
+                const MAX_BARS = 12;
+                if (labels.length > MAX_BARS) {
+                    labels = labels.slice(-MAX_BARS);
+                    efficiency = efficiency.slice(-MAX_BARS);
+                }
+                
+                efficiencyChart.data.labels = labels;
+                efficiencyChart.data.datasets[0].data = efficiency;
+                efficiencyChart.update();
+            } catch (err) {
+                console.error("Error updating efficiency chart:", err);
+            }
+        }
+
+        // Initial fetch on page load
+        updateEfficiencyChart();
+        
+        // Refresh efficiency chart every 5 minutes (300,000 ms)
+        setInterval(updateEfficiencyChart, 300000);
+
+        // General status & telemetry ticker
         function checkTelemetryStatus() {
             fetch('/api/telemetry_status')
                 .then(response => response.json())
@@ -576,6 +659,66 @@ def telemetry_status_endpoint():
   data = fetch_car_telemetry(start_odo_a, start_odo_b)
   return jsonify(data)
 
+@app.route('/api/efficiency-trend')
+def get_efficiency_trend():
+    rates = load_rates()
+    db_path = DB if DB else "carlinko.db"
+    
+    labels = []
+    efficiency_data = []
+
+    if os.path.exists(db_path):
+        try:
+            with sqlite3.connect(db_path, timeout=5.0) as conn:
+                cursor = conn.cursor()
+                
+                # Query distance and percentage drops for fuel and battery over 5-min buckets
+                query = """
+                    SELECT 
+                        strftime('%H:%M', ts / 300 * 300, 'unixepoch', 'localtime') AS time_bucket,
+                        MAX(odo_guess) - MIN(odo_guess) AS dist_km,
+                        MAX(fuel_pct) - MIN(fuel_pct) AS fuel_drop,
+                        MAX(battery) - MIN(battery) AS batt_drop
+                    FROM telemetry
+                    WHERE ts >= (
+                        SELECT COALESCE(MAX(t1.ts), (SELECT MIN(ts) FROM telemetry))
+                        FROM telemetry t1
+                        WHERE t1.ts <= (SELECT MAX(ts) FROM telemetry)
+                          AND (SELECT MIN(t2.ts) FROM telemetry t2 WHERE t2.ts > t1.ts) - t1.ts > 600
+                    )
+                    GROUP BY time_bucket
+                    ORDER BY time_bucket DESC
+                    LIMIT 12
+                """
+                cursor.execute(query)
+                rows = cursor.fetchall()
+                
+                # Reverse rows so they go oldest -> newest for the chart
+                for row in reversed(rows):
+                    time_bucket, dist_km, fuel_drop, batt_drop = row
+                    
+                    # Ensure positive consumption values (drops can sometimes be negative during regen/refuel)
+                    fuel_l = max(0.0, (fuel_drop or 0.0) / 100.0 * TOTAL_FUEL_LITERS)
+                    elec_kwh = max(0.0, (batt_drop or 0.0) / 100.0 * TOTAL_BATTERY_KWH)
+                    
+                    # Compute total cost for this 5-minute block
+                    total_cost_rm = (fuel_l * rates["fuel_price_per_l"]) + (elec_kwh * rates["elec_price_per_kwh"])
+                    
+                    # Compute RM / 100km
+                    if dist_km and dist_km > 0:
+                        rm_per_100km = round((total_cost_rm / dist_km) * 100, 2)
+                    else:
+                        rm_per_100km = 0.0
+                        
+                    labels.append(time_bucket)
+                    efficiency_data.append(rm_per_100km)
+        except Exception as e:
+            print(f"Efficiency trend error: {e}")
+
+    return jsonify({
+        "labels": labels,
+        "efficiency": efficiency_data
+    })
 
 @app.route("/start_trip/<trip_type>", methods=["POST"])
 def start_trip(trip_type):
