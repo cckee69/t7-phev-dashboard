@@ -662,51 +662,53 @@ def telemetry_status_endpoint():
 @app.route('/api/efficiency-trend')
 def get_efficiency_trend():
     rates = load_rates()
-    db_path = DB if DB else "carlinko.db"
+    db = get_db() # Connected to trips.db
     
+    # Get active trip start time from trips.db
+    active_trip = db.execute(
+        "SELECT start_time FROM trips WHERE status = 'ACTIVE' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    
+    if active_trip and active_trip["start_time"]:
+        trip_start_ts = int(datetime.strptime(active_trip["start_time"], "%Y-%m-%d %H:%M:%S").timestamp())
+    else:
+        trip_start_ts = int(time.time()) - 7200 # Fallback to last 2 hours
+
     labels = []
     efficiency_data = []
 
+    db_path = DB if DB else "carlinko.db"
     if os.path.exists(db_path):
         try:
             with sqlite3.connect(db_path, timeout=5.0) as conn:
                 cursor = conn.cursor()
                 
-                # Query distance and percentage drops for fuel and battery over 5-min buckets
+                # Query only ACTIVE logs (online = 1) since the trip started
                 query = """
                     SELECT 
-                        strftime('%H:%M', ts / 300 * 300, 'unixepoch', 'localtime') AS time_bucket,
+                        strftime('%H:%M', (ts / 300) * 300, 'unixepoch', 'localtime') AS time_bucket,
                         MAX(odo_guess) - MIN(odo_guess) AS dist_km,
                         MAX(fuel_pct) - MIN(fuel_pct) AS fuel_drop,
                         MAX(battery) - MIN(battery) AS batt_drop
                     FROM telemetry
-                    WHERE ts >= (
-                        SELECT COALESCE(MAX(t1.ts), (SELECT MIN(ts) FROM telemetry))
-                        FROM telemetry t1
-                        WHERE t1.ts <= (SELECT MAX(ts) FROM telemetry)
-                          AND (SELECT MIN(t2.ts) FROM telemetry t2 WHERE t2.ts > t1.ts) - t1.ts > 600
-                    )
+                    WHERE ts >= ? AND online = 1
                     GROUP BY time_bucket
                     ORDER BY time_bucket DESC
                     LIMIT 12
                 """
-                cursor.execute(query)
+                cursor.execute(query, (trip_start_ts,))
                 rows = cursor.fetchall()
                 
-                # Reverse rows so they go oldest -> newest for the chart
                 for row in reversed(rows):
                     time_bucket, dist_km, fuel_drop, batt_drop = row
                     
-                    # Ensure positive consumption values (drops can sometimes be negative during regen/refuel)
                     fuel_l = max(0.0, (fuel_drop or 0.0) / 100.0 * TOTAL_FUEL_LITERS)
                     elec_kwh = max(0.0, (batt_drop or 0.0) / 100.0 * TOTAL_BATTERY_KWH)
                     
-                    # Compute total cost for this 5-minute block
                     total_cost_rm = (fuel_l * rates["fuel_price_per_l"]) + (elec_kwh * rates["elec_price_per_kwh"])
                     
-                    # Compute RM / 100km
                     if dist_km and dist_km > 0:
-                        rm_per_100km = round((total_cost_rm / dist_km) * 100, 2)
+                        rm_per_100km = round((total_cost_rm / dist_km) * 100.0, 2)
                     else:
                         rm_per_100km = 0.0
                         
