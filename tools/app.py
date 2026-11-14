@@ -663,17 +663,21 @@ def telemetry_status_endpoint():
 @app.route('/api/efficiency-trend')
 def get_efficiency_trend():
     rates = load_rates()
-    db = get_db() # Connected to trips.db
+    db = get_db()
     
-    # Get active trip start time from trips.db
-    active_trip = db.execute(
-        "SELECT start_time FROM trips WHERE status = 'ACTIVE' ORDER BY id DESC LIMIT 1"
+    # Use active trip if running, otherwise the most recent completed trip
+    trip = db.execute(
+        "SELECT start_time, end_time, start_odo, start_battery, start_fuel FROM trips ORDER BY id DESC LIMIT 1"
     ).fetchone()
     
-    if active_trip and active_trip["start_time"]:
-        trip_start_ts = int(datetime.strptime(active_trip["start_time"], "%Y-%m-%d %H:%M:%S").timestamp())
-    else:
-        trip_start_ts = int(time.time()) - 7200 # Fallback to last 2 hours
+    if not trip or not trip["start_time"]:
+        return jsonify({"labels": [], "efficiency": []})
+
+    trip_start_ts = int(datetime.strptime(trip["start_time"], "%Y-%m-%d %H:%M:%S").timestamp())
+    trip_end_ts = (
+        int(datetime.strptime(trip["end_time"], "%Y-%m-%d %H:%M:%S").timestamp())
+        if trip["end_time"] else int(time.time())
+    )
 
     labels = []
     efficiency_data = []
@@ -684,43 +688,57 @@ def get_efficiency_trend():
             with sqlite3.connect(db_path, timeout=5.0) as conn:
                 cursor = conn.cursor()
                 
-                # Query only ACTIVE logs (online = 1) since the trip started
+                # Fetch the final telemetry row at the end of each 5-minute bucket
                 query = """
                     SELECT 
                         strftime('%H:%M', (ts / 300) * 300, 'unixepoch', 'localtime') AS time_bucket,
-                        MAX(odo_guess) - MIN(odo_guess) AS dist_km,
-                        MAX(fuel_pct) - MIN(fuel_pct) AS fuel_drop,
-                        MAX(battery) - MIN(battery) AS batt_drop
+                        MAX(ts) as end_ts
                     FROM telemetry
-                    WHERE ts >= ? AND online = 1
+                    WHERE ts >= ? AND ts <= ? AND online = 1
                     GROUP BY time_bucket
-                    ORDER BY time_bucket DESC
-                    LIMIT 12
+                    ORDER BY time_bucket ASC
                 """
-                cursor.execute(query, (trip_start_ts,))
-                rows = cursor.fetchall()
-                
-                for row in reversed(rows):
-                    time_bucket, dist_km, fuel_drop, batt_drop = row
-                    
-                    fuel_l = max(0.0, (fuel_drop or 0.0) / 100.0 * TOTAL_FUEL_LITERS)
-                    elec_kwh = max(0.0, (batt_drop or 0.0) / 100.0 * TOTAL_BATTERY_KWH)
-                    
-                    total_cost_rm = (fuel_l * rates["fuel_price_per_l"]) + (elec_kwh * rates["elec_price_per_kwh"])
-                    
-                    if dist_km and dist_km > 0:
-                        rm_per_100km = round((total_cost_rm / dist_km) * 100.0, 2)
+                cursor.execute(query, (trip_start_ts, trip_end_ts))
+                buckets = cursor.fetchall()
+
+                start_odo = trip["start_odo"] or 0.0
+                start_batt_kwh = trip["start_battery"] or 0.0
+                start_fuel_l = trip["start_fuel"] or 0.0
+
+                for time_bucket, end_ts in buckets:
+                    cursor.execute(
+                        "SELECT odo_guess, battery, fuel_pct FROM telemetry WHERE ts = ?",
+                        (end_ts,)
+                    )
+                    row = cursor.fetchone()
+                    if not row:
+                        continue
+
+                    curr_odo, curr_batt_pct, curr_fuel_pct = row
+                    curr_batt_kwh = ((curr_batt_pct or 0.0) / 100.0) * TOTAL_BATTERY_KWH
+                    curr_fuel_l = ((curr_fuel_pct or 0.0) / 100.0) * TOTAL_FUEL_LITERS
+
+                    # Cumulative distance and net energy used since trip start
+                    cum_dist_km = max(0.0, (curr_odo or 0.0) - start_odo)
+                    cum_elec_used = max(0.0, start_batt_kwh - curr_batt_kwh)
+                    cum_fuel_used = max(0.0, start_fuel_l - curr_fuel_l)
+
+                    cum_cost_rm = (cum_fuel_used * rates["fuel_price_per_l"]) + (cum_elec_used * rates["elec_price_per_kwh"])
+
+                    if cum_dist_km > 0:
+                        rm_per_100km = round((cum_cost_rm / cum_dist_km) * 100.0, 2)
                     else:
                         rm_per_100km = 0.0
-                        
+
                     labels.append(time_bucket)
                     efficiency_data.append(rm_per_100km)
+
         except Exception as e:
             print(f"Efficiency trend error: {e}")
 
     return jsonify({
-        "labels": labels,
-        "efficiency": efficiency_data
+        "labels": labels[-12:],
+        "efficiency": efficiency_data[-12:]
     })
 
 @app.route("/start_trip/<trip_type>", methods=["POST"])
