@@ -701,9 +701,10 @@ def get_efficiency_trend():
                 cursor.execute(query, (trip_start_ts, trip_end_ts))
                 buckets = cursor.fetchall()
 
-                start_odo = trip["start_odo"] or 0.0
-                start_batt_kwh = trip["start_battery"] or 0.0
-                start_fuel_l = trip["start_fuel"] or 0.0
+                # Set initial baseline to the trip's official start values
+                prev_odo = trip["start_odo"] or 0.0
+                prev_batt_kwh = trip["start_battery"] or 0.0
+                prev_fuel_l = trip["start_fuel"] or 0.0
 
                 for time_bucket, end_ts in buckets:
                     cursor.execute(
@@ -718,20 +719,25 @@ def get_efficiency_trend():
                     curr_batt_kwh = ((curr_batt_pct or 0.0) / 100.0) * TOTAL_BATTERY_KWH
                     curr_fuel_l = ((curr_fuel_pct or 0.0) / 100.0) * TOTAL_FUEL_LITERS
 
-                    # Cumulative distance and net energy used since trip start
-                    cum_dist_km = max(0.0, (curr_odo or 0.0) - start_odo)
-                    cum_elec_used = max(0.0, start_batt_kwh - curr_batt_kwh)
-                    cum_fuel_used = max(0.0, start_fuel_l - curr_fuel_l)
+                    # Independent delta strictly between previous bucket end and current bucket end
+                    dist_km = max(0.0, (curr_odo or 0.0) - prev_odo)
+                    elec_used = max(0.0, prev_batt_kwh - curr_batt_kwh)
+                    fuel_used = max(0.0, prev_fuel_l - curr_fuel_l)
 
-                    cum_cost_rm = (cum_fuel_used * rates["fuel_price_per_l"]) + (cum_elec_used * rates["elec_price_per_kwh"])
+                    cost_rm = (fuel_used * rates["fuel_price_per_l"]) + (elec_used * rates["elec_price_per_kwh"])
 
-                    if cum_dist_km > 0:
-                        rm_per_100km = round((cum_cost_rm / cum_dist_km) * 100.0, 2)
+                    if dist_km > 0:
+                        rm_per_100km = round((cost_rm / dist_km) * 100.0, 2)
                     else:
                         rm_per_100km = 0.0
 
                     labels.append(time_bucket)
                     efficiency_data.append(rm_per_100km)
+
+                    # Advance the baseline to current values for the next iteration
+                    prev_odo = curr_odo
+                    prev_batt_kwh = curr_batt_kwh
+                    prev_fuel_l = curr_fuel_l
 
         except Exception as e:
             print(f"Efficiency trend error: {e}")
@@ -740,6 +746,7 @@ def get_efficiency_trend():
         "labels": labels[-12:],
         "efficiency": efficiency_data[-12:]
     })
+
 
 @app.route("/start_trip/<trip_type>", methods=["POST"])
 def start_trip(trip_type):
