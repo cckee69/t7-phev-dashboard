@@ -674,7 +674,6 @@ def get_efficiency_trend():
     rates = load_rates()
     db = get_db()
     
-    # Read interval from UI dropdown query parameter (default to 300 seconds / 5 mins)
     try:
         bucket_seconds = int(request.args.get('interval', 300))
     except ValueError:
@@ -702,17 +701,18 @@ def get_efficiency_trend():
             with sqlite3.connect(db_path, timeout=5.0) as conn:
                 cursor = conn.cursor()
                 
-                # Dynamically bin telemetry based on the selected interval size
+                # FIX: Group by relative elapsed bin index so bins start strictly at trip_start_ts
                 query = f"""
                     SELECT 
-                        strftime('%H:%M', (ts / {bucket_seconds}) * {bucket_seconds}, 'unixepoch', 'localtime') AS time_bucket,
+                        strftime('%H:%M', datetime(?, '+' || (((ts - ?) / {bucket_seconds}) * {bucket_seconds}) || ' seconds', 'localtime')) AS time_bucket,
                         MAX(ts) as end_ts
                     FROM telemetry
                     WHERE ts >= ? AND ts <= ? AND online = 1
-                    GROUP BY time_bucket
-                    ORDER BY time_bucket ASC
+                    GROUP BY ((ts - ?) / {bucket_seconds})
+                    ORDER BY end_ts ASC
                 """
-                cursor.execute(query, (trip_start_ts, trip_end_ts))
+                # Parameters: 1. start_ts for datetime formatting, 2. start_ts for elapsed math, 3. min_ts, 4. max_ts, 5. start_ts for GROUP BY
+                cursor.execute(query, (trip_start_ts, trip_start_ts, trip_start_ts, trip_end_ts, trip_start_ts))
                 buckets = cursor.fetchall()
 
                 prev_odo = trip["start_odo"] or 0.0
