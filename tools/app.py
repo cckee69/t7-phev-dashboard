@@ -372,7 +372,15 @@ HTML_TEMPLATE = """
         <!-- 5-MINUTE INTERVAL EFFICIENCY BAR CHART CARD -->
         <div class="chart-card">
             <div class="card-title" style="margin-bottom: 4px;">Efficiency Trend</div>
-            <div style="font-size: 0.75rem; color: #888; text-transform: uppercase; margin-bottom: 10px;">RM / 100km (5-Min Intervals)</div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding: 0 10px;">
+                <span id="chart-subtitle" style="font-size: 0.75rem; color: #888; text-transform: uppercase;">RM / 100km (15-Min Interval)</span>
+                <select id="intervalSelector" onchange="updateEfficiencyChart()" style="background: #2a2a2a; color: #fff; border: 1px solid #444; border-radius: 4px; padding: 2px 6px; font-size: 0.75rem;">
+                    <option value="300">5 Mins</option>
+                    <option value="600">10 Mins</option>
+                    <option value="900" selected>15 Mins</option>
+                    <option value="1800">30 Mins</option>
+                </select>
+            </div>
             <div class="chart-container">
                 <canvas id="efficiencyChart"></canvas>
             </div>
@@ -467,13 +475,14 @@ HTML_TEMPLATE = """
         // Function to update the 5-minute efficiency chart
         async function updateEfficiencyChart() {
             try {
-                const response = await fetch('/api/efficiency-trend');
+                const interval = document.getElementById('intervalSelector').value;
+                const response = await fetch(`/api/efficiency-trend?interval=${interval}`);
                 const data = await response.json();
                 
                 let labels = data.labels;
                 let efficiency = data.efficiency;
                 
-                // Truncate to maximum 12 bars (60 minutes rolling window)
+                // Truncate to maximum 12 bars (rolling window)
                 const MAX_BARS = 12;
                 if (labels.length > MAX_BARS) {
                     labels = labels.slice(-MAX_BARS);
@@ -665,7 +674,12 @@ def get_efficiency_trend():
     rates = load_rates()
     db = get_db()
     
-    # Use active trip if running, otherwise the most recent completed trip
+    # Read interval from UI dropdown query parameter (default to 300 seconds / 5 mins)
+    try:
+        bucket_seconds = int(request.args.get('interval', 300))
+    except ValueError:
+        bucket_seconds = 300
+
     trip = db.execute(
         "SELECT start_time, end_time, start_odo, start_battery, start_fuel FROM trips ORDER BY id DESC LIMIT 1"
     ).fetchone()
@@ -688,10 +702,10 @@ def get_efficiency_trend():
             with sqlite3.connect(db_path, timeout=5.0) as conn:
                 cursor = conn.cursor()
                 
-                # Fetch the final telemetry row at the end of each 5-minute bucket
-                query = """
+                # Dynamically bin telemetry based on the selected interval size
+                query = f"""
                     SELECT 
-                        strftime('%H:%M', (ts / 300) * 300, 'unixepoch', 'localtime') AS time_bucket,
+                        strftime('%H:%M', (ts / {bucket_seconds}) * {bucket_seconds}, 'unixepoch', 'localtime') AS time_bucket,
                         MAX(ts) as end_ts
                     FROM telemetry
                     WHERE ts >= ? AND ts <= ? AND online = 1
@@ -701,7 +715,6 @@ def get_efficiency_trend():
                 cursor.execute(query, (trip_start_ts, trip_end_ts))
                 buckets = cursor.fetchall()
 
-                # Set initial baseline to the trip's official start values
                 prev_odo = trip["start_odo"] or 0.0
                 prev_batt_kwh = trip["start_battery"] or 0.0
                 prev_fuel_l = trip["start_fuel"] or 0.0
@@ -719,7 +732,6 @@ def get_efficiency_trend():
                     curr_batt_kwh = ((curr_batt_pct or 0.0) / 100.0) * TOTAL_BATTERY_KWH
                     curr_fuel_l = ((curr_fuel_pct or 0.0) / 100.0) * TOTAL_FUEL_LITERS
 
-                    # Independent delta strictly between previous bucket end and current bucket end
                     dist_km = max(0.0, (curr_odo or 0.0) - prev_odo)
                     elec_used = max(0.0, prev_batt_kwh - curr_batt_kwh)
                     fuel_used = max(0.0, prev_fuel_l - curr_fuel_l)
@@ -734,7 +746,6 @@ def get_efficiency_trend():
                     labels.append(time_bucket)
                     efficiency_data.append(rm_per_100km)
 
-                    # Advance the baseline to current values for the next iteration
                     prev_odo = curr_odo
                     prev_batt_kwh = curr_batt_kwh
                     prev_fuel_l = curr_fuel_l
@@ -746,7 +757,6 @@ def get_efficiency_trend():
         "labels": labels[-12:],
         "efficiency": efficiency_data[-12:]
     })
-
 
 @app.route("/start_trip/<trip_type>", methods=["POST"])
 def start_trip(trip_type):
