@@ -369,11 +369,16 @@ HTML_TEMPLATE = """
             </div>
         </div>
 
-        <!-- 5-MINUTE INTERVAL EFFICIENCY BAR CHART CARD -->
+        <!-- EFFICIENCY TREND CHART CARD WITH TRIP & INTERVAL SELECTORS -->
         <div class="chart-card">
             <div class="card-title" style="margin-bottom: 4px;">Efficiency Trend</div>
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding: 0 10px;">
-                <span id="chart-subtitle" style="font-size: 0.75rem; color: #888; text-transform: uppercase;">RM / 100km (15-Min Interval)</span>
+                <!-- Trip Toggle Buttons -->
+                <div style="display: flex; gap: 4px;">
+                    <button id="btnTripA" onclick="selectTrip('A')" style="background: #2a2a2a; color: #4CAF50; border: 1px solid #4CAF50; border-radius: 4px; padding: 2px 8px; font-size: 0.75rem; cursor: pointer;">Trip A</button>
+                    <button id="btnTripB" onclick="selectTrip('B')" style="background: #2a2a2a; color: #888; border: 1px solid #444; border-radius: 4px; padding: 2px 8px; font-size: 0.75rem; cursor: pointer;">Trip B</button>
+                </div>
+                <!-- Interval Selector -->
                 <select id="intervalSelector" onchange="updateEfficiencyChart()" style="background: #2a2a2a; color: #fff; border: 1px solid #444; border-radius: 4px; padding: 2px 6px; font-size: 0.75rem;">
                     <option value="300">5 Mins</option>
                     <option value="600">10 Mins</option>
@@ -472,17 +477,34 @@ HTML_TEMPLATE = """
             }
         });
 
-        // Function to update the 5-minute efficiency chart
+        let currentTripId = 'A';
+        
+        function selectTrip(tripLetter) {
+            currentTripId = tripLetter;
+            
+            // Update button styles to show active state
+            const btnA = document.getElementById('btnTripA');
+            const btnB = document.getElementById('btnTripB');
+            if (tripLetter === 'A') {
+                btnA.style.color = '#4CAF50'; btnA.style.borderColor = '#4CAF50';
+                btnB.style.color = '#888'; btnB.style.borderColor = '#444';
+            } else {
+                btnB.style.color = '#4CAF50'; btnB.style.borderColor = '#4CAF50';
+                btnA.style.color = '#888'; btnA.style.borderColor = '#444';
+            }
+            
+            updateEfficiencyChart();
+        }
+        
         async function updateEfficiencyChart() {
             try {
                 const interval = document.getElementById('intervalSelector').value;
-                const response = await fetch(`/api/efficiency-trend?interval=${interval}`);
+                const response = await fetch(`/api/efficiency-trend?trip=${currentTripId}&interval=${interval}`);
                 const data = await response.json();
                 
                 let labels = data.labels;
                 let efficiency = data.efficiency;
                 
-                // Truncate to maximum 12 bars (rolling window)
                 const MAX_BARS = 12;
                 if (labels.length > MAX_BARS) {
                     labels = labels.slice(-MAX_BARS);
@@ -674,15 +696,28 @@ def get_efficiency_trend():
     rates = load_rates()
     db = get_db()
     
+    # Read requested trip letter (default to 'A') and interval
+    target_trip = request.args.get('trip', 'A').upper()
     try:
         bucket_seconds = int(request.args.get('interval', 300))
     except ValueError:
         bucket_seconds = 300
 
-    trip = db.execute(
-        "SELECT start_time, end_time, start_odo, start_battery, start_fuel FROM trips ORDER BY id DESC LIMIT 1"
-    ).fetchone()
-    
+    # Fetch Trip A or Trip B based on user selection
+    # (Assuming your trips table stores a trip identifier column, or alternates rows/IDs. 
+    # If you track them by specific IDs or an identifier column like 'trip_name', adjust this query accordingly)
+    if target_trip == 'B':
+        trip = db.execute(
+            "SELECT start_time, end_time, start_odo, start_battery, start_fuel FROM trips WHERE id % 2 = 0 ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    else:
+        trip = db.execute(
+            "SELECT start_time, end_time, start_odo, start_battery, start_fuel FROM trips WHERE id % 2 != 0 ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        
+    # Fallback if specific split isn't needed and you store them sequentially or have a column:
+    # trip = db.execute("SELECT * FROM trips WHERE name = ? ...", (target_trip,)).fetchone()
+
     if not trip or not trip["start_time"]:
         return jsonify({"labels": [], "efficiency": []})
 
@@ -701,7 +736,6 @@ def get_efficiency_trend():
             with sqlite3.connect(db_path, timeout=5.0) as conn:
                 cursor = conn.cursor()
                 
-                # Fetch telemetry grouped strictly by elapsed interval index from trip_start_ts
                 query = f"""
                     SELECT 
                         ((ts - ?) / {bucket_seconds}) AS bin_index,
@@ -742,7 +776,6 @@ def get_efficiency_trend():
                     else:
                         rm_per_100km = 0.0
 
-                    # Calculate precise clock time for this bin's start label based on trip start + bin offset
                     bin_start_dt = datetime.fromtimestamp(trip_start_ts + (bin_index * bucket_seconds))
                     time_label = bin_start_dt.strftime('%H:%M')
 
