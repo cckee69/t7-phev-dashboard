@@ -701,25 +701,24 @@ def get_efficiency_trend():
             with sqlite3.connect(db_path, timeout=5.0) as conn:
                 cursor = conn.cursor()
                 
-                # FIX: Group by relative elapsed bin index so bins start strictly at trip_start_ts
+                # Fetch telemetry grouped strictly by elapsed interval index from trip_start_ts
                 query = f"""
                     SELECT 
-                        strftime('%H:%M', datetime(?, '+' || (((ts - ?) / {bucket_seconds}) * {bucket_seconds}) || ' seconds', 'localtime')) AS time_bucket,
+                        ((ts - ?) / {bucket_seconds}) AS bin_index,
                         MAX(ts) as end_ts
                     FROM telemetry
                     WHERE ts >= ? AND ts <= ? AND online = 1
-                    GROUP BY ((ts - ?) / {bucket_seconds})
-                    ORDER BY end_ts ASC
+                    GROUP BY bin_index
+                    ORDER BY bin_index ASC
                 """
-                # Parameters: 1. start_ts for datetime formatting, 2. start_ts for elapsed math, 3. min_ts, 4. max_ts, 5. start_ts for GROUP BY
-                cursor.execute(query, (trip_start_ts, trip_start_ts, trip_start_ts, trip_end_ts, trip_start_ts))
+                cursor.execute(query, (trip_start_ts, trip_start_ts, trip_end_ts))
                 buckets = cursor.fetchall()
 
                 prev_odo = trip["start_odo"] or 0.0
                 prev_batt_kwh = trip["start_battery"] or 0.0
                 prev_fuel_l = trip["start_fuel"] or 0.0
 
-                for time_bucket, end_ts in buckets:
+                for bin_index, end_ts in buckets:
                     cursor.execute(
                         "SELECT odo_guess, battery, fuel_pct FROM telemetry WHERE ts = ?",
                         (end_ts,)
@@ -743,7 +742,11 @@ def get_efficiency_trend():
                     else:
                         rm_per_100km = 0.0
 
-                    labels.append(time_bucket)
+                    # Calculate precise clock time for this bin's start label based on trip start + bin offset
+                    bin_start_dt = datetime.fromtimestamp(trip_start_ts + (bin_index * bucket_seconds))
+                    time_label = bin_start_dt.strftime('%H:%M')
+
+                    labels.append(time_label)
                     efficiency_data.append(rm_per_100km)
 
                     prev_odo = curr_odo
