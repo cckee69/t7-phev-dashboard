@@ -282,7 +282,7 @@ HTML_TEMPLATE = """
     <div class="container">
         <div class="header-box">
             <span id="led-status" class="led-indicator led-empty" title="Checking status..."></span>
-            <h1>🚗 PHEV Dual-Trip Tracker</h1>
+            <h1>🚗 Tiggo7 A/B Trip Tracker</h1>
         </div>
         <div class="sub-status-bar">
             <span>⚡ 12V: <strong id="val-volt12">{{ "%.1f"|format(telemetry.volt12) }}V</strong></span>
