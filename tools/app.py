@@ -696,27 +696,19 @@ def get_efficiency_trend():
     rates = load_rates()
     db = get_db()
     
-    # Read requested trip letter (default to 'A') and interval
+    # Read requested trip letter ('A' or 'B') from the UI toggle
     target_trip = request.args.get('trip', 'A').upper()
     try:
         bucket_seconds = int(request.args.get('interval', 300))
     except ValueError:
         bucket_seconds = 300
 
-    # Fetch Trip A or Trip B based on user selection
-    # (Assuming your trips table stores a trip identifier column, or alternates rows/IDs. 
-    # If you track them by specific IDs or an identifier column like 'trip_name', adjust this query accordingly)
-    if target_trip == 'B':
-        trip = db.execute(
-            "SELECT start_time, end_time, start_odo, start_battery, start_fuel FROM trips WHERE id % 2 = 0 ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-    else:
-        trip = db.execute(
-            "SELECT start_time, end_time, start_odo, start_battery, start_fuel FROM trips WHERE id % 2 != 0 ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-        
-    # Fallback if specific split isn't needed and you store them sequentially or have a column:
-    # trip = db.execute("SELECT * FROM trips WHERE name = ? ...", (target_trip,)).fetchone()
+    # CORRECTED: Query specifically by your trip identifier column (e.g., 'name' or 'trip_name')
+    # Replace 'name' with whatever column name your app uses to distinguish Trip A vs Trip B in the database
+    trip = db.execute(
+        "SELECT start_time, end_time, start_odo, start_battery, start_fuel FROM trips WHERE name = ? ORDER BY id DESC LIMIT 1",
+        (target_trip,)
+    ).fetchone()
 
     if not trip or not trip["start_time"]:
         return jsonify({"labels": [], "efficiency": []})
