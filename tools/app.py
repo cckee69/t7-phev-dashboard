@@ -706,7 +706,7 @@ def get_efficiency_trend():
     # CORRECTED: Query specifically by your trip identifier column (e.g., 'name' or 'trip_name')
     # Replace 'name' with whatever column name your app uses to distinguish Trip A vs Trip B in the database
     trip = db.execute(
-        "SELECT start_time, end_time, start_odo, start_battery, start_fuel FROM trips WHERE name = ? ORDER BY id DESC LIMIT 1",
+        "SELECT start_time, end_time, start_odo, start_battery, start_fuel FROM trips WHERE trip_type = ? ORDER BY id DESC LIMIT 1",
         (target_trip,)
     ).fetchone()
 
