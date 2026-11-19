@@ -733,7 +733,7 @@ def get_efficiency_trend():
                         ((ts - ?) / {bucket_seconds}) AS bin_index,
                         MAX(ts) as end_ts
                     FROM telemetry
-                    WHERE ts >= ? AND ts <= ? AND online = 1
+                    WHERE ts >= ? AND ts <= ?
                     GROUP BY bin_index
                     ORDER BY bin_index ASC
                 """
@@ -758,11 +758,11 @@ def get_efficiency_trend():
                     curr_fuel_l = ((curr_fuel_pct or 0.0) / 100.0) * TOTAL_FUEL_LITERS
 
                     dist_km = max(0.0, (curr_odo or 0.0) - prev_odo)
-                    elec_used = max(0.0, prev_batt_kwh - curr_batt_kwh)
+                    elec_used = prev_batt_kwh - curr_batt_kwh
                     fuel_used = max(0.0, prev_fuel_l - curr_fuel_l)
 
                     cost_rm = (fuel_used * rates["fuel_price_per_l"]) + (elec_used * rates["elec_price_per_kwh"])
-
+                    cost_rm = max(0.0, cost_rm) 
                     if dist_km > 0:
                         rm_per_100km = round((cost_rm / dist_km) * 100.0, 2)
                     else:
